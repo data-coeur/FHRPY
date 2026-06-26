@@ -1,0 +1,80 @@
+{
+  "morpho": [
+    {
+      "name": "morpho_train19",
+      "file": "morpho/morpho_train19.fhr",
+      "markers": "morpho/morpho_train19.fhrh",
+      "labels": "morpho/morpho_train19.labels.npz",
+      "kind": "doppler",
+      "duration_min": 29.2,
+      "accelerations": 2,
+      "decelerations": 3,
+      "description": "FHRMA morphology expert example (train19.fhr): expert baseline + 2 acc / 3 dec."
+    },
+    {
+      "name": "morpho_train03",
+      "file": "morpho/morpho_train03.fhr",
+      "markers": "morpho/morpho_train03.fhrh",
+      "labels": "morpho/morpho_train03.labels.npz",
+      "kind": "doppler",
+      "duration_min": 40.6,
+      "accelerations": 5,
+      "decelerations": 3,
+      "description": "FHRMA morphology expert example (train03.fhr): expert baseline + 5 acc / 3 dec."
+    },
+    {
+      "name": "morpho_train35",
+      "file": "morpho/morpho_train35.fhr",
+      "markers": "morpho/morpho_train35.fhrh",
+      "labels": "morpho/morpho_train35.labels.npz",
+      "kind": "doppler",
+      "duration_min": 42.4,
+      "accelerations": 18,
+      "decelerations": 4,
+      "description": "FHRMA morphology expert example (train35.fhr): expert baseline + 18 acc / 4 dec."
+    },
+    {
+      "name": "morpho_train21",
+      "file": "morpho/morpho_train21.fhr",
+      "markers": "morpho/morpho_train21.fhrh",
+      "labels": "morpho/morpho_train21.labels.npz",
+      "kind": "doppler",
+      "duration_min": 48.4,
+      "accelerations": 5,
+      "decelerations": 19,
+      "description": "FHRMA morphology expert example (train21.fhr): expert baseline + 5 acc / 19 dec."
+    }
+  ],
+  "falsesig": [
+    {
+      "name": "fs_dopmhr_01",
+      "file": "falsesig/fs_dopmhr_01.fhrm",
+      "markers": "falsesig/fs_dopmhr_01.fhrh",
+      "kind": "doppler",
+      "duration_min": 77.8,
+      "false_signal_episodes": 35,
+      "expulsion_min": 11.3,
+      "description": "FHRMA false-signal example (DopMHRTrain0155.fhrm): 35 expert FS episodes, expulsion at 11.3 min."
+    },
+    {
+      "name": "fs_dopmhr_02",
+      "file": "falsesig/fs_dopmhr_02.fhrm",
+      "markers": "falsesig/fs_dopmhr_02.fhrh",
+      "kind": "doppler",
+      "duration_min": 175.2,
+      "false_signal_episodes": 33,
+      "expulsion_min": 132.3,
+      "description": "FHRMA false-signal example (DopMHRTrain0125.fhrm): 33 expert FS episodes, expulsion at 132.3 min."
+    },
+    {
+      "name": "fs_dopmhr_03",
+      "file": "falsesig/fs_dopmhr_03.fhrm",
+      "markers": "falsesig/fs_dopmhr_03.fhrh",
+      "kind": "doppler",
+      "duration_min": 132.8,
+      "false_signal_episodes": 30,
+      "expulsion_min": 125.1,
+      "description": "FHRMA false-signal example (DopMHRTrain0133.fhrm): 30 expert FS episodes, expulsion at 125.1 min."
+    }
+  ]
+}

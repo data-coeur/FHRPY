@@ -125,6 +125,8 @@ class FHRViewer:
         self.safe_max = safe_max
 
         self.markers = self._normalize_markers(markers)
+        if markers is None and self.path is not None:
+            self._load_companion_markers()
         self._do_analyze = bool(analyze)
 
         if (analyze or self.false_signals) and self.path is not None:
@@ -134,6 +136,33 @@ class FHRViewer:
         self._server = None
         self._server_thread = None
         self._event_callbacks: dict[str, list] = {}
+
+    @classmethod
+    def from_record(cls, record, markers=None, **opts):
+        """Build a viewer directly from an in-memory :class:`fhrpy.io.FHRRecord`.
+
+        Useful to display a hand-built or label-injected recording (e.g. an
+        expert baseline) without writing a file first. The record is encoded to
+        the analysed ``.rcfa`` layout when it carries a baseline, else
+        ``.rcfm`` / ``.rcf``.
+        """
+        import numpy as np
+
+        from ..io import encode_fhr
+
+        def _has(a):
+            return a is not None and np.asarray(a).size > 0
+
+        with_analysis = _has(getattr(record, "baseline", None))
+        with_mhr = _has(getattr(record, "mhr", None)) or with_analysis
+        if with_analysis and not _has(getattr(record, "fhri", None)):
+            record.fhri = np.asarray(record.fhr1, dtype=float)
+        data = encode_fhr(record, with_mhr=with_mhr, with_analysis=with_analysis,
+                          header_bytes=8)
+        v = cls(path=None, markers=markers, **opts)
+        v.data = data
+        v.ext = "rcfa" if with_analysis else ("rcfm" if with_mhr else "rcf")
+        return v
 
     # ------------------------------------------------------------------ #
     # helpers
@@ -160,6 +189,24 @@ class FHRViewer:
             return out
         # assume list of [sample, text]
         return [[int(m[0]), str(m[1])] for m in markers]
+
+    def _load_companion_markers(self) -> None:
+        """Load the companion marker file sitting next to the recording, if any.
+
+        Looks for ``<name>.fhrh`` (the FHRPY/FHRMA marker convention), then
+        ``<name>.marks``, then the legacy append-'h' name (e.g. ``x.rcfm`` ->
+        ``x.rcfmh``).
+        """
+        if self.path is None:
+            return
+        for cand in (
+            self.path.with_suffix(".fhrh"),
+            self.path.with_suffix(".marks"),
+            self.path.parent / (self.path.name + "h"),
+        ):
+            if cand.exists():
+                self.markers = self._normalize_markers(cand.read_text(encoding="utf-8"))
+                return
 
     def _apply_pipeline(self) -> None:
         """Run the analysis pipeline in the correct order and build the payload.
@@ -494,3 +541,33 @@ class FHRViewer:
         """
         self._event_callbacks.setdefault(event, []).append(callback)
         return self
+
+
+def link_scroll(*viewers) -> bool:
+    """Keep several already-displayed viewers scroll-synchronised (notebook).
+
+    After displaying two (or more) :class:`FHRViewer` iframes, call this to lock
+    their time windows together: scrolling, paging or wheel-scrolling one moves
+    the others to the **same instant**. Handy to compare expert labels vs the
+    method's predictions side by side. Implemented by relaying each viewer's
+    ``scroll`` ``postMessage`` in the notebook frontend (best effort across
+    VSCode / Colab); the in-page ``viewer.on('scroll', cb)`` API is the fallback.
+    """
+    try:
+        from IPython.display import Javascript, display  # type: ignore
+    except Exception:
+        return False
+    ids = [v._iframe_id for v in viewers]
+    js = (
+        "(function(){var ids=" + json.dumps(ids) + ";"
+        "function frames(){return ids.map(function(id){return document.getElementById(id);});}"
+        "var busy=false;"
+        "window.addEventListener('message',function(e){"
+        "var m=e.data; if(!m||m.source!=='fhrviewer'||m.event!=='scroll'||busy) return;"
+        "var t=m.detail&&m.detail.time; if(t==null) return; busy=true;"
+        "frames().forEach(function(f){ if(f&&f.contentWindow&&f.contentWindow!==e.source){"
+        "f.contentWindow.postMessage({target:'fhrviewer',method:'scrollTo',args:[t]},'*');}});"
+        "setTimeout(function(){busy=false;},40);});})();"
+    )
+    display(Javascript(js))
+    return True
