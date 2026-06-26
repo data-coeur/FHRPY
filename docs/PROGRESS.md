@@ -19,6 +19,11 @@ A single place to review the project state from the repository browser
 | 4 | Full README + demos + AIM-CTG recruiting | ✅ README done (AIM-CTG text + demos pending) |
 | 5 | MLOps real-time inference server | ✅ stdlib HTTP server + Docker; real bench 12×3h in ~40 s on 4 cores (issue #6) |
 
+Install path verified: `pip install .` in a clean venv packages the web assets +
+the FS model weights, and the viewer / WMFB / FS all work from the installed
+package (so `pip install` + Colab work end-to-end). CI workflow is ready at
+`.github/workflows/ci.yml` (pushed once the PAT has the `workflow` scope — #8).
+
 Tests: run `pip install -e . && python3 -m pytest -q` (**43 passed, 4 skipped**;
 add the Octave references via `bash docker/octave/run.sh` to enable the 15 parity
 tests → 58 passed).
