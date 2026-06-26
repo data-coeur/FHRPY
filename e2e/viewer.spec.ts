@@ -50,10 +50,10 @@ test('CTG viewer renders grid + curve and reacts to toggles', async ({ page }) =
   expect(colors.red).toBeGreaterThan(50);    // FHR curve present
   await page.screenshot({ path: path.join(outDir, 'viewer-default.png') });
 
-  // toggle colored zones off then on
-  await page.click('.btn-zones');
+  // toggle baseline + acc/dec zones off then on
+  await page.click('.btn-baseline');
   await page.waitForTimeout(150);
-  await page.click('.btn-zones');
+  await page.click('.btn-baseline');
   await page.waitForTimeout(150);
 
   // toggle MHR off
@@ -61,8 +61,8 @@ test('CTG viewer renders grid + curve and reacts to toggles', async ({ page }) =
   await page.waitForTimeout(150);
   await page.screenshot({ path: path.join(outDir, 'viewer-mhr-off.png') });
 
-  // switch to 3cm
-  await page.click('.btn-3cm');
+  // switch to 3cm/min
+  await page.click('.btn-scale');
   await page.waitForTimeout(200);
   const is3cm = await page.evaluate(() => (window as any).fhrViewer.graph.is3cm);
   expect(is3cm).toBe(1);

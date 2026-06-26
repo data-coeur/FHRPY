@@ -92,6 +92,10 @@ class FHRViewer:
         false_signals_kind: str = "doppler",
         stage2_start: int | None = None,
         timezone: float = 0.0,
+        rcf_min: float | None = None,
+        rcf_max: float | None = None,
+        safe_min: float | None = None,
+        safe_max: float | None = None,
         **opts,
     ):
         self.path = Path(path) if path is not None else None
@@ -112,6 +116,13 @@ class FHRViewer:
         # Time-axis timezone, in hours east of UTC. Default 0 (UTC) so an
         # anonymised epoch-0 start reads 00:00 on the time axis.
         self.timezone = float(timezone)
+
+        # Top FHR grid bounds (bpm) and the central safe/normal band. ``None``
+        # keeps the JS defaults (50..210 grid, 110..160 safe band).
+        self.rcf_min = rcf_min
+        self.rcf_max = rcf_max
+        self.safe_min = safe_min
+        self.safe_max = safe_max
 
         self.markers = self._normalize_markers(markers)
         self._do_analyze = bool(analyze)
@@ -273,6 +284,10 @@ class FHRViewer:
             opts["channels"] = self.channels
         if self.signals_per_graph is not None:
             opts["signalsPerGraph"] = self.signals_per_graph
+        if self.rcf_min is not None and self.rcf_max is not None:
+            opts["range"] = [float(self.rcf_min), float(self.rcf_max)]
+        if self.safe_min is not None and self.safe_max is not None:
+            opts["safeZone"] = [float(self.safe_min), float(self.safe_max)]
         opts.update(self._extra_opts)
         return json.dumps(opts)
 
@@ -314,7 +329,7 @@ class FHRViewer:
         escaped = html.replace("&", "&amp;").replace('"', "&quot;")
         return (
             f'<iframe id="{self._iframe_id}" srcdoc="{escaped}" '
-            f'style="width:100%;height:{self.height + 70}px;border:none;" '
+            f'style="width:100%;height:{self.height + 10}px;border:none;background:#fff;" '
             f'allow="fullscreen"></iframe>'
         )
 
@@ -441,6 +456,28 @@ class FHRViewer:
     def set_interpolate(self, on: bool):
         self.interpolate = bool(on)
         return self._post("setInterpolate", bool(on))
+
+    def set_contractions_visible(self, on: bool):
+        """Show/hide the detected contraction (TOCO) zones."""
+        return self._post("setContractionsVisible", bool(on))
+
+    def set_false_signals_visible(self, on: bool):
+        """Show/hide the false-signal (maternal/artefact) zones."""
+        return self._post("setFalseSignalsVisible", bool(on))
+
+    def set_range(self, min_bpm: float, max_bpm: float):
+        """Set the top FHR grid bounds (bpm)."""
+        self.rcf_min, self.rcf_max = float(min_bpm), float(max_bpm)
+        return self._post("setRange", float(min_bpm), float(max_bpm))
+
+    def set_safe_zone(self, min_bpm: float, max_bpm: float):
+        """Set the central safe/normal FHR band (bpm), default 110–160."""
+        self.safe_min, self.safe_max = float(min_bpm), float(max_bpm)
+        return self._post("setSafeZone", float(min_bpm), float(max_bpm))
+
+    def print(self):
+        """Open the printable, multi-page A4-landscape layout (Save as PDF)."""
+        return self._post("print")
 
     # ------------------------------------------------------------------ #
     # inbound events (viewer -> Python) — best effort

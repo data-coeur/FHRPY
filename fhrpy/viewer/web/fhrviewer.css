@@ -1,12 +1,13 @@
 /*
  * fhrviewer.css — self-contained styles for the vanilla FHRViewer.
- * Extracted and cleaned from the legacy fhrviewer.css (bootstrap rules dropped).
+ * Bootstrap rules dropped; the whole widget sits on a white background.
  */
 
 .fhr-viewer {
   display: block;
   height: 600px;
   box-sizing: border-box;
+  background: #fff;
   font-family: Arial, Helvetica, sans-serif;
   -webkit-user-select: none;
   -moz-user-select: none;
@@ -21,10 +22,11 @@
 .fhr-viewer .graph {
   position: relative;
   min-width: 100px;
-  min-height: 100px;
-  height: calc(100% - 60px);
+  min-height: 80px;
+  height: calc(100% - 84px);
   cursor: pointer;
   overflow: hidden;
+  background: #fff;
 }
 
 .fhr-viewer .graph .background-canvas,
@@ -34,16 +36,6 @@
   top: 0;
   width: 100%;
   height: 100%;
-}
-
-.fhr-viewer .signalloss {
-  position: absolute;
-  z-index: 1;
-  top: 0;
-  right: 4px;
-  color: #080;
-  font-size: 1.1em;
-  pointer-events: none;
 }
 
 .fhr-viewer .eventTextEdit {
@@ -58,57 +50,23 @@
   overflow: hidden;
 }
 
-/* --- controllers bar --------------------------------------------------- */
+/* --- controllers: full-width scrollbar row on top, button row below ----- */
 .fhr-viewer .controllers {
-  position: relative;
-  height: 40px;
-  margin: 8px 0;
-}
-
-.fhr-viewer .controller-icons {
-  position: absolute;
-  left: 0;
-  top: 0;
-  padding: 0 5px;
   display: flex;
-  gap: 4px;
+  flex-direction: column;
+  gap: 8px;
+  padding: 6px 6px 0;
+  background: #fff;
 }
 
-.fhr-viewer .btn-fhr-icons {
-  text-align: center;
-  vertical-align: middle;
-  padding: 0;
-  min-width: 36px;
-  height: 36px;
-  border: 1px solid #bbb;
-  border-radius: 5px;
-  background: #f6f6f6;
-  cursor: pointer;
-  font-size: 15px;
-  color: #333;
-}
-
-.fhr-viewer .btn-fhr-icons:hover {
-  background: #e8e8e8;
-}
-
-.fhr-viewer .btn-fhr-icons.active {
-  background: #cde6ff;
-  border-color: #5a9bd4;
-}
-
-/* --- scrollbar --------------------------------------------------------- */
 .fhr-viewer .fhr-viewer-scrollbar {
-  position: absolute;
-  right: 0;
-  top: 9px;
-  left: 360px;
+  position: relative;
+  width: 100%;
+  height: 22px;
+  margin: 0;
   background-color: rgba(0, 0, 0, 0.05);
   box-shadow: inset 1px 1px 16px rgba(0, 0, 0, 0.1);
   border-radius: 10px;
-  display: block;
-  height: 22px;
-  margin: 0;
 }
 
 .fhr-viewer .scrollbarDragger {
@@ -136,17 +94,47 @@
   border-radius: 8px;
 }
 
-/* --- resizebar --------------------------------------------------------- */
-.fhr-viewer .resizebar {
-  width: 100%;
-  height: 12px;
-  background-color: #ededed;
-  border-top: 1px solid #ddd;
-  cursor: row-resize;
+/* --- button row -------------------------------------------------------- */
+.fhr-viewer .controller-icons {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+  align-items: center;
 }
 
-@media screen and (max-width: 1000px) {
-  .fhr-viewer .fhr-viewer-scrollbar {
-    left: 300px;
-  }
+.fhr-viewer .btn-fhr-icons {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 0;
+  min-width: 38px;
+  height: 38px;
+  border: 1px solid #bbb;
+  border-radius: 6px;
+  background: #f6f6f6;
+  cursor: pointer;
+  color: #333;
+  line-height: 1.05;
+}
+
+.fhr-viewer .btn-fhr-icons.text {
+  font-size: 12px;
+  font-weight: bold;
+  padding: 0 6px;
+}
+
+.fhr-viewer .btn-fhr-icons.icon svg {
+  width: 24px;
+  height: 24px;
+  display: block;
+}
+
+.fhr-viewer .btn-fhr-icons:hover {
+  background: #e8e8e8;
+}
+
+.fhr-viewer .btn-fhr-icons.active {
+  background: #cde6ff;
+  border-color: #5a9bd4;
 }

@@ -49,8 +49,10 @@ const DEFAULT_COLORS = {
 class Signals {
   constructor() {
     this.srate = 4;
-    this.minRCF = 50;
+    this.minRCF = 50;     // top FHR grid bounds (configurable)
     this.maxRCF = 210;
+    this.safeMin = 110;   // central "safe"/normal FHR band (configurable)
+    this.safeMax = 160;
     this.minTOCO = 0;
     this.maxTOCO = 100;
     this.start = -1;
@@ -279,7 +281,9 @@ class GraphPlot {
     this.BorderBottom = 15;
     this.mouseMode = 'None';
     this.editingMark = -1;
-    this.displayMorpho = true;   // colored zones toggle
+    this.displayMorpho = true;        // baseline + accel/decel zones toggle
+    this.displayContractions = true;  // contraction (TOCO) zones toggle
+    this.displayFalseSignals = true;  // false-signal (URS/NTA) zones toggle
     this.fullGrid = 1;
     this.is3cm = 0;
     this.time = 0;
@@ -402,10 +406,12 @@ class GraphPlot {
     ctx.textBaseline = 'middle';
     const textheight = 22;
 
-    // grey band over 50..100 bpm
-    ctx.fillStyle = '#F8F8F8';
-    ctx.fillRect(this.BorderLeft, this.BorderTop + (50 * this.RCFHeight) / 160,
-      this.graphWidth, (50 * this.RCFHeight) / 160);
+    // central "safe"/normal FHR band (default 110..160 bpm, configurable)
+    const span = this.signals.maxRCF - this.signals.minRCF;
+    const yA = this.BorderTop + ((this.signals.maxRCF - this.signals.safeMax) / span) * this.RCFHeight;
+    const yB = this.BorderTop + ((this.signals.maxRCF - this.signals.safeMin) / span) * this.RCFHeight;
+    ctx.fillStyle = '#F0F0F0';
+    ctx.fillRect(this.BorderLeft, yA, this.graphWidth, yB - yA);
 
     // vertical time lines
     for (let j = 0; j <= ((this.winlength + 60) * (1 + this.is3cm * 2)) / 30; j++) {
@@ -422,38 +428,34 @@ class GraphPlot {
       }
     }
 
-    // horizontal FHR lines (every 5 bpm)
-    for (let j = 0; j <= 32; j++) {
-      const ty = this.BorderTop + (j * 5 * this.RCFHeight) / 160;
+    // horizontal FHR lines (every 5 bpm); bold lines mark the safe-band edges.
+    const nLines = Math.round(span / 5);
+    const jSafeMax = Math.round((this.signals.maxRCF - this.signals.safeMax) / 5);
+    const jSafeMin = Math.round((this.signals.maxRCF - this.signals.safeMin) / 5);
+    for (let j = 0; j <= nLines; j++) {
+      const ty = this.BorderTop + (j * 5 * this.RCFHeight) / span;
+      const bold = j === jSafeMax || j === jSafeMin;
       if (this.fullGrid) {
-        if (j === 10 || j === 20) this.hline(this.BorderLeft, this.BorderLeft + this.graphWidth, ty, 4, GRID_COLOR);
+        if (bold) this.hline(this.BorderLeft, this.BorderLeft + this.graphWidth, ty, 4, GRID_COLOR);
         else if (j % 2 === 0) this.hline(this.BorderLeft, this.BorderLeft + this.graphWidth, ty, 2, GRID_COLOR);
         else this.hline(this.BorderLeft, this.BorderLeft + this.graphWidth, ty, 1, GRID_COLOR);
-      } else if (j === 10 || j === 20) this.hline(this.BorderLeft, this.BorderLeft + this.graphWidth, ty, 3, GRID_COLOR);
+      } else if (bold) this.hline(this.BorderLeft, this.BorderLeft + this.graphWidth, ty, 3, GRID_COLOR);
       else if (j % 2 === 0) this.hline(this.BorderLeft, this.BorderLeft + this.graphWidth, ty, 1, GRID_COLOR);
     }
 
-    // FHR numeric labels
-    for (let j = 2; j <= 32; j += 4) {
-      const ty = this.BorderTop + (j * 5 * this.RCFHeight) / 160;
+    // FHR numeric labels (every 4th line). Safe-band labels sit on a grey chip.
+    for (let j = 2; j <= nLines; j += 4) {
+      const ty = this.BorderTop + (j * 5 * this.RCFHeight) / span;
       if (this.fullGrid || j % 8 === 2) {
+        const val = this.signals.maxRCF - 5 * j;
+        const inSafe = val >= this.signals.safeMin && val <= this.signals.safeMax;
         for (let i = 600 - (this.time % 600); i < this.winlength; i += 600) {
-          const text = (210 - 5 * j).toString();
+          const text = val.toString();
           const textwidth = ctx.measureText(text).width + 4;
           const textx = this.BorderLeft + (i / this.winlength) * this.graphWidth - textwidth / 2;
           const texty = ty - textheight / 2;
-          if (j === 10) {
-            ctx.fillStyle = '#F8F8F8';
-            ctx.fillRect(textx, texty + textheight / 2, textwidth, textheight / 2);
-            ctx.fillStyle = '#FFFFFF';
-            ctx.fillRect(textx, texty, textwidth, textheight / 2);
-          } else if (j === 18 || j === 14) {
-            ctx.fillStyle = '#F8F8F8';
-            ctx.fillRect(textx, texty, textwidth, textheight);
-          } else {
-            ctx.fillStyle = '#FFFFFF';
-            ctx.fillRect(textx, texty, textwidth, textheight);
-          }
+          ctx.fillStyle = inSafe ? '#F0F0F0' : '#FFFFFF';
+          ctx.fillRect(textx, texty, textwidth, textheight);
           ctx.fillStyle = GRID_COLOR;
           ctx.fillText(text, textx + textwidth / 2, texty + textheight / 2);
         }
@@ -506,10 +508,9 @@ class GraphPlot {
 
   /* --- colored zones (periods) ------------------------------------------- */
   drawPeriods() {
-    if (!this.displayMorpho) return;
     const s = this.signals;
-    const zeros = new Array(s.TOCO.length).fill(0);
     if (!s.Marks) return;
+    const zeros = new Array(s.TOCO.length).fill(0);
     for (let i = 0; i < s.Marks.length; i++) {
       const m = s.Marks[i];
       if (!m || m[1][0] !== '$') continue;
@@ -519,18 +520,23 @@ class GraphPlot {
       const S = this.BorderLeft + (startSamp / s.srate - (this.time - s.start)) / this.winlength * this.graphWidth;
       const W = (durSamp / s.srate) / this.winlength * this.graphWidth;
       if (type === 'CON') {
+        if (!this.displayContractions) continue;
         this.ctx.fillStyle = '#99990033';
         this.fillSurface(s.TOCO, zeros, startSamp, startSamp + durSamp, 0);
       } else if (type === 'ACC') {
+        if (!this.displayMorpho) continue;
         this.ctx.fillStyle = '#00FF0033';
         this.fillSurface(this._baselineFor(s), s.RCFi.length ? s.baselineRCF : this._baselineFor(s),
           startSamp, startSamp + durSamp, 1, s.RCFi.length ? s.RCFi : s.RCF1);
       } else if (type === 'DEC') {
+        if (!this.displayMorpho) continue;
         this.ctx.fillStyle = '#FF000033';
         this.fillSurface(this._baselineFor(s), s.RCFi.length ? s.baselineRCF : this._baselineFor(s),
           startSamp, startSamp + durSamp, 1, s.RCFi.length ? s.RCFi : s.RCF1);
       } else if (type === 'NTA' || type === 'URS') {
-        this.ctx.fillStyle = '#55555533';
+        if (!this.displayFalseSignals) continue;
+        // light pink: false signals read as "lighter / unreliable", not opaque grey.
+        this.ctx.fillStyle = '#FF78B43A';
         this.ctx.fillRect(S, this.BorderTop, W, this.RCFHeight);
       }
     }
@@ -788,7 +794,8 @@ class GraphPlot {
       this.measurer.vline.setAttributeNS(null, 'x2', mousex);
       this.measurer.textY.setAttributeNS(null, 'y', mousey - 5);
       if (mousey < this.RCFHeight + this.RCFTOCOSpace) {
-        this.measurer.Y1 = ((this.RCFHeight - mousey) / this.RCFHeight) * 160 + 50;
+        this.measurer.Y1 = ((this.RCFHeight - mousey) / this.RCFHeight)
+          * (this.signals.maxRCF - this.signals.minRCF) + this.signals.minRCF;
         this.measurer.textY.textContent = `${this.measurer.Y1.toFixed(1)} bpm`;
       } else {
         this.measurer.Y1 = -((this.graphHeight - mousey) / this.TOCOHeight) * 100;
@@ -805,7 +812,8 @@ class GraphPlot {
       this.measurer.textDX.setAttributeNS(null, 'y', 20);
       this.measurer.textDX.setAttributeNS(null, 'x', mousex + 5);
       if (this.measurer.Y1 > 0) {
-        this.measurer.textDY.textContent = `${Math.abs(((this.RCFHeight - mousey) / this.RCFHeight) * 160 + 50 - this.measurer.Y1).toFixed(1)} bpm`;
+        this.measurer.textDY.textContent = `${Math.abs(((this.RCFHeight - mousey) / this.RCFHeight)
+          * (this.signals.maxRCF - this.signals.minRCF) + this.signals.minRCF - this.measurer.Y1).toFixed(1)} bpm`;
       } else {
         this.measurer.textDY.textContent = Math.abs(Math.round(((this.graphHeight - mousey) / this.TOCOHeight) * 100 + this.measurer.Y1));
       }
@@ -833,17 +841,53 @@ class GraphPlot {
 /* ----------------------------------------------------------------------------
  * FHRViewer — public, host-driveable controller.
  * ------------------------------------------------------------------------- */
+/* Clean, self-drawn SVG icons (24x24). `currentColor` follows the button text
+ * color; a few are intentionally multi-colored (baseline / false-signals) so the
+ * glyph reads at a glance. */
+const ICONS = {
+  previouspage: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 4 L7 12 L15 20 Z" fill="currentColor"/></svg>',
+  nextpage: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4 L17 12 L9 20 Z" fill="currentColor"/></svg>',
+  // Ruler / measurer.
+  measure: '<svg viewBox="0 0 24 24" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.6">'
+    + '<rect x="2.5" y="7.5" width="19" height="9" rx="1"/>'
+    + '<path d="M6 7.5 v3 M9.5 7.5 v4.5 M13 7.5 v3 M16.5 7.5 v4.5 M20 7.5 v3"/></g></svg>',
+  // Pencil / add event.
+  addevent: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M3 17.25 V21 h3.75 L17.81 9.94 l-3.75-3.75 Z'
+    + 'M20.71 7.04 a1 1 0 0 0 0-1.41 l-2.34-2.34 a1 1 0 0 0-1.41 0 l-1.83 1.83 3.75 3.75 1.83-1.83 Z"/></svg>',
+  // Baseline: black FHR with a deceleration, red baseline, orange-filled dip.
+  baseline: '<svg viewBox="0 0 24 24" aria-hidden="true">'
+    + '<path d="M8 9 C9.5 9 10 17 12 17 C14 17 14.5 9 16 9 Z" fill="#ff8c00" fill-opacity="0.75"/>'
+    + '<path d="M2 9 H22" stroke="#e00000" stroke-width="1.6" fill="none"/>'
+    + '<path d="M2 9 H8 C9.5 9 10 17 12 17 C14 17 14.5 9 16 9 H22" stroke="#111" stroke-width="1.7" fill="none"/></svg>',
+  // Contraction (TOCO) bell.
+  contractions: '<svg viewBox="0 0 24 24" aria-hidden="true">'
+    + '<path d="M3 20 C8 20 9 6.5 12 6.5 C15 6.5 16 20 21 20 Z" fill="#9a8400" fill-opacity="0.35" stroke="#7a6a00" stroke-width="1.3"/></svg>',
+  // False signals: two crossing HR traces (FHR vs maternal), light tones.
+  falsesignals: '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke-width="1.7">'
+    + '<path d="M2 9 q3 -5 6 0 t6 0 t6 0" stroke="#ff6fa3"/>'
+    + '<path d="M2 15 q3 5 6 0 t6 0 t6 0" stroke="#6fa8ff"/></svg>',
+  // Interpolate: solid–dashed–solid bridge across a gap.
+  interpolate: '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8">'
+    + '<path d="M2 17 L8 9"/><path d="M8 9 H16" stroke-dasharray="2.2 2.2"/><path d="M16 9 L22 17"/></svg>',
+  // Printer.
+  print: '<svg viewBox="0 0 24 24" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.5">'
+    + '<path d="M7 9 V3 h10 v6"/><path d="M7 16 H5 a1 1 0 0 1-1-1 V11 a1 1 0 0 1 1-1 h14 a1 1 0 0 1 1 1 v4 a1 1 0 0 1-1 1 h-2"/>'
+    + '<rect x="7" y="14" width="10" height="6.5" rx="0.5"/></g><circle cx="17.2" cy="11.8" r="1" fill="currentColor"/></svg>',
+};
+
+// [name, label/icon-key, tooltip, isIcon]
 const BUTTONS = [
-  ['previouspage', '◀', 'Previous page'],
-  ['nextpage', '▶', 'Next page'],
-  ['measure', '↕', 'Measure'],
-  ['addevent', '✎', 'Add event'],
-  ['addquestion', '?', 'Add question'],
-  ['3cm', '3cm', '1cm / 3cm per minute'],
-  ['zones', '▦', 'Toggle colored zones'],
-  ['mhr', 'MHR', 'Toggle MHR'],
-  ['interpolate', '⤳', 'Interpolate gaps'],
-  ['download', '⤓', 'Download recording + markers'],
+  ['previouspage', 'previouspage', 'Previous page', true],
+  ['nextpage', 'nextpage', 'Next page', true],
+  ['measure', 'measure', 'Measure (ruler): click to set a point, click again for a second one', true],
+  ['addevent', 'addevent', 'Add an event marker', true],
+  ['scale', '3cm<br>/min', 'Toggle paper speed: 1 / 3 cm per minute', false],
+  ['baseline', 'baseline', 'Show / hide the baseline + acceleration / deceleration zones', true],
+  ['contractions', 'contractions', 'Show / hide detected contraction (TOCO) zones', true],
+  ['falsesignals', 'falsesignals', 'Show / hide false-signal (maternal / artefact) zones', true],
+  ['mhr', 'MHR', 'Show / hide the maternal heart rate (MHR)', false],
+  ['interpolate', 'interpolate', 'Interpolate missing points (bridge gaps)', true],
+  ['print', 'print', 'Print to PDF (A4 landscape, ~1 cm/min, multi-page)', true],
 ];
 
 export class FHRViewer {
@@ -874,6 +918,16 @@ export class FHRViewer {
     if (opts.scale === 3) this.graph.is3cm = 1;
     if (opts.interpolate) this.graph.interpolate = true;
     if (opts.zones === false) this.graph.displayMorpho = false;
+    if (opts.contractions === false) this.graph.displayContractions = false;
+    if (opts.falseSignals === false) this.graph.displayFalseSignals = false;
+    if (Array.isArray(opts.range) && opts.range.length === 2) {
+      this.graph.signals.minRCF = Number(opts.range[0]);
+      this.graph.signals.maxRCF = Number(opts.range[1]);
+    }
+    if (Array.isArray(opts.safeZone) && opts.safeZone.length === 2) {
+      this.graph.signals.safeMin = Number(opts.safeZone[0]);
+      this.graph.signals.safeMax = Number(opts.safeZone[1]);
+    }
 
     this._wireEvents();
 
@@ -900,37 +954,37 @@ export class FHRViewer {
     canvas.className = 'background-canvas';
     const svg = document.createElementNS(SVGNS, 'svg');
     svg.setAttribute('class', 'frontground-svg');
-    const loss = document.createElement('div');
-    loss.className = 'signalloss';
-    loss.innerHTML = 'Signal loss: <span>0</span> %';
-    this.graphEl.append(canvas, svg, loss);
+    this.graphEl.append(canvas, svg);
 
     const controllers = document.createElement('div');
     controllers.className = 'controllers';
+
+    // Scrollbar gets its own full-width row, on top...
+    this.scrollEl = document.createElement('div');
+    this.scrollEl.className = 'fhr-viewer-scrollbar';
+
+    // ...and the icon buttons sit on the row below it (no overlap).
     const icons = document.createElement('div');
     icons.className = 'controller-icons';
     this._btn = {};
-    for (const [name, label, title] of BUTTONS) {
+    for (const [name, label, title, isIcon] of BUTTONS) {
       const b = document.createElement('button');
       b.type = 'button';
-      b.className = `btn-fhr-icons btn-${name}`;
-      b.title = title;
-      b.textContent = label;
+      b.className = `btn-fhr-icons btn-${name}` + (isIcon ? ' icon' : ' text');
+      b.title = title;        // native tooltip on hover for every button
+      b.innerHTML = isIcon ? (ICONS[label] || '') : label;
       icons.appendChild(b);
       this._btn[name] = b;
     }
-    this.scrollEl = document.createElement('div');
-    this.scrollEl.className = 'fhr-viewer-scrollbar';
-    controllers.append(icons, this.scrollEl);
+    controllers.append(this.scrollEl, icons);
 
-    this.resizebar = document.createElement('div');
-    this.resizebar.className = 'resizebar';
-
-    this.host.append(this.graphEl, controllers, this.resizebar);
+    this.host.append(this.graphEl, controllers);
 
     // reflect initial toggle states
-    if (this.opts.zones !== false) this._btn.zones.classList.add('active');
-    if (this.opts.scale === 3) this._btn['3cm'].classList.add('active');
+    if (this.opts.zones !== false) this._btn.baseline.classList.add('active');
+    if (this.opts.contractions !== false) this._btn.contractions.classList.add('active');
+    if (this.opts.falseSignals !== false) this._btn.falsesignals.classList.add('active');
+    if (this.opts.scale === 3) this._btn.scale.classList.add('active');
     if (this.opts.interpolate) this._btn.interpolate.classList.add('active');
     this._btn.mhr.classList.add('active');
   }
@@ -940,19 +994,48 @@ export class FHRViewer {
     this._btn.nextpage.addEventListener('click', () => { this.nextpage(); this._emit('button:nextpage', {}); });
     this._btn.measure.addEventListener('click', () => { this._toggleMouseMode('measure'); this._emit('button:measure', {}); });
     this._btn.addevent.addEventListener('click', () => { this._toggleMouseMode('event'); this._emit('button:addevent', {}); });
-    this._btn.addquestion.addEventListener('click', () => { this._toggleMouseMode('question'); this._emit('button:addquestion', {}); });
-    this._btn['3cm'].addEventListener('click', () => { this.toggle3cm(); this._emit('button:3cm', { is3cm: this.graph.is3cm }); });
-    this._btn.zones.addEventListener('click', () => { this.setZonesVisible(!this.graph.displayMorpho); this._emit('button:zones', { on: this.graph.displayMorpho }); });
+    this._btn.scale.addEventListener('click', () => { this.toggle3cm(); this._emit('button:scale', { is3cm: this.graph.is3cm }); });
+    this._btn.baseline.addEventListener('click', () => { this.setZonesVisible(!this.graph.displayMorpho); this._emit('button:baseline', { on: this.graph.displayMorpho }); });
+    this._btn.contractions.addEventListener('click', () => { this.setContractionsVisible(!this.graph.displayContractions); this._emit('button:contractions', { on: this.graph.displayContractions }); });
+    this._btn.falsesignals.addEventListener('click', () => { this.setFalseSignalsVisible(!this.graph.displayFalseSignals); this._emit('button:falsesignals', { on: this.graph.displayFalseSignals }); });
     this._btn.mhr.addEventListener('click', () => { this.setChannelVisible('MHR', this.channelVisible.MHR === false); this._emit('button:mhr', { on: this.channelVisible.MHR }); });
     this._btn.interpolate.addEventListener('click', () => { this.setInterpolate(!this.graph.interpolate); this._emit('button:interpolate', { on: this.graph.interpolate }); });
-    this._btn.download.addEventListener('click', () => { this.download(); this._emit('button:download', {}); });
+    this._btn.print.addEventListener('click', () => { this.print(); this._emit('button:print', {}); });
 
     // graph drag-to-pan + click (measure / new mark / edit)
     this._panState = null;
     this.graphEl.addEventListener('mousedown', (e) => this._graphMouseDown(e));
 
-    // resizebar drag
-    this.resizebar.addEventListener('mousedown', (e) => this._resizeDown(e));
+    // mouse-wheel scrolling with inertia (momentum) — works under VSCode/Colab.
+    this.graphEl.addEventListener('wheel', (e) => this._onWheel(e), { passive: false });
+  }
+
+  /* --- mouse-wheel scroll with momentum ----------------------------------- */
+  _onWheel(e) {
+    const g = this.graph, s = g.signals;
+    if (s.start < 0 || !g.winlength) return;
+    e.preventDefault();
+    // A wheel notch nudges time; deltaX (trackpads) contributes too.
+    const secPerPx = g.winlength / Math.max(g.graphWidth, 1);
+    const delta = (e.deltaY + e.deltaX) * (e.deltaMode === 1 ? 16 : 1);
+    this._wheelVel = (this._wheelVel || 0) + delta * secPerPx * 0.35;
+    if (!this._wheelRAF) this._wheelStep();
+  }
+
+  _wheelStep() {
+    const g = this.graph, s = g.signals;
+    this._wheelVel *= 0.88;                       // momentum decay
+    if (Math.abs(this._wheelVel) < 0.04) { this._wheelVel = 0; this._wheelRAF = null; return; }
+    const tmax = s.lastTime - g.winlength + 120;
+    let t = g.time + this._wheelVel;
+    if (t > tmax) { t = tmax; this._wheelVel = 0; }
+    if (t < s.start) { t = s.start; this._wheelVel = 0; }
+    g.time = t;
+    g.redraw();
+    this._updateScrollBar();
+    this._emit('scroll', { time: g.time });
+    this._wheelRAF = (typeof requestAnimationFrame !== 'undefined')
+      ? requestAnimationFrame(() => this._wheelStep()) : null;
   }
 
   /* --- scroll / paging ---------------------------------------------------- */
@@ -1055,20 +1138,6 @@ export class FHRViewer {
     this._emit('scroll', { time: g.time });
   }
 
-  /* --- resizebar ---------------------------------------------------------- */
-  _resizeDown(e) {
-    const startH = this.host.clientHeight;
-    const startY = e.clientY;
-    const move = (ev) => { this.setHeight(startH + (ev.clientY - startY)); };
-    const up = () => {
-      document.removeEventListener('mousemove', move);
-      document.removeEventListener('mouseup', up);
-      this._emit('heightChange', { height: this.host.clientHeight });
-    };
-    document.addEventListener('mousemove', move);
-    document.addEventListener('mouseup', up);
-  }
-
   /* ====================================================================== *
    *  PUBLIC API
    * ====================================================================== */
@@ -1079,8 +1148,6 @@ export class FHRViewer {
     if (this.graph.time === 0 || this.graph.time < this.graph.signals.start) {
       this.graph.time = this.graph.signals.start;
     }
-    const span = this.graphEl.querySelector('.signalloss span');
-    if (span) span.textContent = this.graph.signals.signalLoss();
     this.graph.redraw();
     this._updateScrollBar();
     return this;
@@ -1114,6 +1181,69 @@ export class FHRViewer {
     return this;
   }
 
+  /**
+   * Open a printable, multi-page A4-landscape layout and trigger the print
+   * dialog (the user can "Save as PDF"). Geometry: 1 cm/min horizontally and
+   * 20 bpm/cm vertically (a 12.63 cm graph area gives exactly 20 bpm/cm for the
+   * default 50–210 range); consecutive pages overlap by ~2 min so nothing falls
+   * on a page seam. Inspired by the legacy fileprint.php but fully client-side.
+   */
+  print(opts = {}) {
+    const src = this.graph, s = src.signals;
+    if (s.start < 0) return this;
+    const pxPerCm = 37.8 * 2;                       // 2x oversampling for crisp print
+    const Wcm = opts.pageWidthCm || 26;             // ≈ 1 cm/min -> ≈ 26 min/page
+    const Hcm = opts.pageHeightCm || 12.63;         // graph area -> 20 bpm/cm
+    const overlapSec = (opts.overlapMin != null ? opts.overlapMin : 2) * 60;
+
+    // Offscreen render surface that reuses the parsed signals + display state.
+    const box = document.createElement('div');
+    box.style.cssText = `position:absolute;left:-99999px;top:0;`
+      + `width:${Math.round(Wcm * pxPerCm)}px;height:${Math.round(Hcm * pxPerCm)}px;`;
+    box.innerHTML = '<canvas class="background-canvas"></canvas><svg class="frontground-svg"></svg>';
+    document.body.appendChild(box);
+    const gp = new GraphPlot(box, { channelVisible: this.channelVisible });
+    gp.signals = s;                                 // share parsed data + marks
+    gp.displayMorpho = src.displayMorpho;
+    gp.displayContractions = src.displayContractions;
+    gp.displayFalseSignals = src.displayFalseSignals;
+    gp.interpolate = src.interpolate;
+    gp.channels = src.channels;
+    gp.tzOffset = src.tzOffset;
+    gp.is3cm = 0;                                    // print at 1 cm/min
+    gp.fullGrid = 1;
+
+    gp.time = s.start;
+    gp.redraw();
+    const winSec = gp.winlength;
+    const step = Math.max(60, winSec - overlapSec);
+    const totalSec = s.lastTime - s.start;
+    const nPages = Math.max(1, Math.ceil((totalSec - overlapSec) / step));
+
+    const imgs = [];
+    for (let i = 0; i < nPages; i++) {
+      gp.time = Math.min(s.start + i * step, Math.max(s.start, s.lastTime - winSec));
+      gp.redraw();
+      imgs.push(gp.canvas.toDataURL('image/png'));
+    }
+    document.body.removeChild(box);
+
+    const pages = imgs.map((d) => `<div class="page"><img src="${d}"/></div>`).join('');
+    const w = window.open('', '_blank');
+    if (!w) return this;                            // pop-up blocked
+    w.document.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>FHR print</title>'
+      + '<style>@page{size:A4 landscape;margin:0.7cm;}'
+      + 'html,body{margin:0;padding:0;background:#fff;}'
+      + `.page{width:${Wcm}cm;height:${Hcm}cm;page-break-after:always;}`
+      + '.page:last-child{page-break-after:auto;}'
+      + '.page img{width:100%;height:100%;display:block;}'
+      + `</style></head><body>${pages}</body></html>`);
+    w.document.close();
+    w.focus();
+    setTimeout(() => { try { w.print(); } catch (e) { /* noop */ } }, 350);
+    return this;
+  }
+
   /** Scroll to an epoch (>= 100000) or a fraction (0..1). */
   scrollTo(epochOrFraction) {
     const g = this.graph, s = g.signals;
@@ -1130,7 +1260,7 @@ export class FHRViewer {
 
   setScale(cmPerMin) {
     this.graph.is3cm = cmPerMin === 3 ? 1 : 0;
-    this._btn['3cm'].classList.toggle('active', !!this.graph.is3cm);
+    this._btn.scale.classList.toggle('active', !!this.graph.is3cm);
     this.graph.redraw();
     this._updateScrollBar();
     this._emit('scaleChange', { cmPerMin: this.graph.is3cm ? 3 : 1, is3cm: this.graph.is3cm });
@@ -1148,7 +1278,14 @@ export class FHRViewer {
   }
 
   setHeight(px) {
+    px = Math.max(160, Math.round(px));
     this.host.style.height = `${px}px`;
+    // If embedded in a same-origin srcdoc iframe (the notebook case), grow the
+    // iframe too so the cell follows the height instead of clipping the bottom.
+    try {
+      const fr = window.frameElement;
+      if (fr) fr.style.height = `${px + 4}px`;
+    } catch (e) { /* cross-origin frame: ignore */ }
     if (this.graph.signals.start >= 0) this.graph.redraw();
     this._updateScrollBar();
     this._emit('heightChange', { height: px });
@@ -1166,9 +1303,43 @@ export class FHRViewer {
 
   setZonesVisible(on) {
     this.graph.displayMorpho = !!on;
-    this._btn.zones.classList.toggle('active', !!on);
+    this._btn.baseline.classList.toggle('active', !!on);
     this.graph.redraw();
     this._emit('zonesChange', { on: !!on });
+    return this;
+  }
+
+  setContractionsVisible(on) {
+    this.graph.displayContractions = !!on;
+    this._btn.contractions.classList.toggle('active', !!on);
+    this.graph.redraw();
+    this._emit('contractionsChange', { on: !!on });
+    return this;
+  }
+
+  setFalseSignalsVisible(on) {
+    this.graph.displayFalseSignals = !!on;
+    this._btn.falsesignals.classList.toggle('active', !!on);
+    this.graph.redraw();
+    this._emit('falseSignalsChange', { on: !!on });
+    return this;
+  }
+
+  /** Configure the top FHR grid bounds (bpm). */
+  setRange(minBpm, maxBpm) {
+    this.graph.signals.minRCF = Number(minBpm);
+    this.graph.signals.maxRCF = Number(maxBpm);
+    this.graph.redraw();
+    this._emit('rangeChange', { min: this.graph.signals.minRCF, max: this.graph.signals.maxRCF });
+    return this;
+  }
+
+  /** Configure the central safe / normal FHR band (bpm). */
+  setSafeZone(minBpm, maxBpm) {
+    this.graph.signals.safeMin = Number(minBpm);
+    this.graph.signals.safeMax = Number(maxBpm);
+    this.graph.redraw();
+    this._emit('safeZoneChange', { min: this.graph.signals.safeMin, max: this.graph.signals.safeMax });
     return this;
   }
 
