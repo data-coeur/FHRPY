@@ -14,12 +14,17 @@ A single place to review the project state from the repository browser
 | 1 | PHP-free web CTG viewer + Python wrapper | ✅ first cut (issue #2) |
 | 3 | WMFB baseline + morphology (NumPy) | ✅ core (issue #4) + wired into viewer |
 | — | File I/O `.fhr/.rcf/.rcfm/.dat` (MATLAB-parity) | ✅ done |
-| 2 | False-signal detection (`fhrma-fs`) | 🔄 in progress |
+| 2 | False-signal detection (`fhrma-fs`) | 🔄 inference ported & unit-tested (issue #3) |
 | — | MATLAB parity via Octave docker | 🔜 |
 | 4 | Full README + demos + AIM-CTG recruiting | 🔜 |
 | 5 | MLOps real-time inference server | 🔜 |
 
-Tests: run `pip install -e . && python3 -m pytest -q` (currently **28 passed, 2 skipped**).
+Tests: run `pip install -e . && python3 -m pytest -q` (currently **43 passed, 4 skipped**).
+
+> Étape 2 note: the false-signal GRU inference is ported (verified to 1e-10 vs an
+> independent reference) and runs without TensorFlow, but **dataset-level accuracy
+> vs MATLAB is not yet validated** — it needs the exact `EvalFSForDataset` protocol
+> and MHR handling (DopMHR dataset files censor MHR to 0). See issue #3.
 
 ## What the viewer looks like
 
