@@ -15,11 +15,19 @@ A single place to review the project state from the repository browser
 | 3 | WMFB baseline + morphology (NumPy) | ✅ core (issue #4) + wired into viewer |
 | — | File I/O `.fhr/.rcf/.rcfm/.dat` (MATLAB-parity) | ✅ done |
 | 2 | False-signal detection (`fhrma-fs`) | 🔄 inference ported & unit-tested (issue #3) |
-| — | MATLAB parity via Octave docker | 🔜 |
-| 4 | Full README + demos + AIM-CTG recruiting | 🔜 |
+| — | MATLAB parity via Octave docker | ✅ io/preprocess EXACT, WMFB ~0.27 bpm (issue #4) |
+| 4 | Full README + demos + AIM-CTG recruiting | ✅ README done (AIM-CTG text + demos pending) |
 | 5 | MLOps real-time inference server | 🔜 |
 
-Tests: run `pip install -e . && python3 -m pytest -q` (currently **43 passed, 4 skipped**).
+Tests: run `pip install -e . && python3 -m pytest -q` (**43 passed, 4 skipped**;
+add the Octave references via `bash docker/octave/run.sh` to enable the 15 parity
+tests → 58 passed).
+
+**MATLAB parity** (original FHRMA code run in Octave vs FHRPY NumPy): `read_fhr`
+and `preprocess` are **bit-exact (0.0)**; the WMFB baseline matches to **0.27–0.49
+bpm mean** (only start/end FIR edges differ). See the overlay below.
+
+![parity](screenshots/parity-wmfb-baseline.png)
 
 > Étape 2 note: the false-signal GRU inference is ported (verified to 1e-10 vs an
 > independent reference) and runs without TensorFlow, but **dataset-level accuracy
