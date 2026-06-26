@@ -841,6 +841,7 @@ const BUTTONS = [
   ['zones', '▦', 'Toggle colored zones'],
   ['mhr', 'MHR', 'Toggle MHR'],
   ['interpolate', '⤳', 'Interpolate gaps'],
+  ['download', '⤓', 'Download recording + markers'],
 ];
 
 export class FHRViewer {
@@ -941,6 +942,7 @@ export class FHRViewer {
     this._btn.zones.addEventListener('click', () => { this.setZonesVisible(!this.graph.displayMorpho); this._emit('button:zones', { on: this.graph.displayMorpho }); });
     this._btn.mhr.addEventListener('click', () => { this.setChannelVisible('MHR', this.channelVisible.MHR === false); this._emit('button:mhr', { on: this.channelVisible.MHR }); });
     this._btn.interpolate.addEventListener('click', () => { this.setInterpolate(!this.graph.interpolate); this._emit('button:interpolate', { on: this.graph.interpolate }); });
+    this._btn.download.addEventListener('click', () => { this.download(); this._emit('button:download', {}); });
 
     // graph drag-to-pan + click (measure / new mark / edit)
     this._panState = null;
@@ -1068,6 +1070,8 @@ export class FHRViewer {
    *  PUBLIC API
    * ====================================================================== */
   loadBuffer(arrayBuffer, ext = 'rcfm') {
+    this._buffer = arrayBuffer;             // keep for download
+    this._ext = (ext || 'rcfm').replace('.', '');
     this.graph.signals.loadBuffer(arrayBuffer, ext);
     if (this.graph.time === 0 || this.graph.time < this.graph.signals.start) {
       this.graph.time = this.graph.signals.start;
@@ -1084,6 +1088,28 @@ export class FHRViewer {
   setMarkers(list) { this.graph.signals.setMarks(list); this.graph.redraw(); this._markersChanged(); return this; }
 
   getMarkers() { return this.graph.signals.getMarks(); }
+
+  /** Serialize markers to the on-disk marker-file format (7-digit sample + text). */
+  markersText() {
+    return this.getMarkers()
+      .map((m) => String(m[0]).padStart(7, '0') + ' ' + m[1])
+      .join('\n');
+  }
+
+  /** Trigger a client-side download of the recording and its marker file. */
+  download(basename = 'recording') {
+    const dl = (data, type, fname) => {
+      const url = URL.createObjectURL(new Blob([data], { type }));
+      const a = document.createElement('a');
+      a.href = url; a.download = fname;
+      document.body.appendChild(a); a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    };
+    if (this._buffer) dl(this._buffer, 'application/octet-stream', `${basename}.${this._ext}`);
+    dl(this.markersText() + '\n', 'text/plain', `${basename}.marks`);
+    return this;
+  }
 
   /** Scroll to an epoch (>= 100000) or a fraction (0..1). */
   scrollTo(epochOrFraction) {
