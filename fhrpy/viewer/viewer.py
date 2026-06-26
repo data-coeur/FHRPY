@@ -209,6 +209,56 @@ class FHRViewer:
         # URS marks first, then existing marks (drawn order is sample-sorted).
         self.markers = urs_marks + self.markers
 
+    # ------------------------------------------------------------------ #
+    # saving (recording + marker file)
+    # ------------------------------------------------------------------ #
+    def save_markers(self, path: str | Path) -> Path:
+        """Write the current markers to a companion marker file.
+
+        Format matches the viewer's loader: one line per mark, a 7-digit
+        zero-padded 4 Hz sample index, a space, then the marker text (e.g.
+        ``"0005216 $ ACC 192"`` or ``"0001234 £Question"``).
+        """
+        path = Path(path)
+        lines = [f"{int(s):07d} {t}" for s, t in sorted(self.markers, key=lambda m: m[0])]
+        path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+        return path
+
+    def save_recording(self, path: str | Path) -> Path:
+        """Write the recording to a ``.rcf`` / ``.rcfm`` / ``.fhr`` file.
+
+        The signal payload is taken from the source file (re-encoded via
+        :func:`fhrpy.io.write_fhr` to the format implied by ``path``'s
+        extension). Markers are *not* embedded in the recording — use
+        :meth:`save_markers` for the companion marker file, or :meth:`save`
+        to write both at once.
+        """
+        if self.path is None:
+            raise ValueError("no source recording to save")
+        path = Path(path)
+        from ..io import read_fhr, write_fhr
+
+        rec = read_fhr(self.path)
+        ext = path.suffix.lower().lstrip(".")
+        with_mhr = ext in ("rcfm", "fhrm")
+        header = 8 if ext in ("rcf", "rcfm") else 4
+        write_fhr(path, rec, with_mhr=with_mhr, header_bytes=header)
+        return path
+
+    def save(self, basepath: str | Path) -> tuple[Path, Path]:
+        """Save both the recording and the companion marker file.
+
+        ``basepath`` may include an extension (defaults to ``.rcfm``); the marker
+        file is written next to it with a ``.marks`` suffix. Returns
+        ``(recording_path, markers_path)``.
+        """
+        basepath = Path(basepath)
+        if basepath.suffix == "":
+            basepath = basepath.with_suffix(".rcfm")
+        rec_path = self.save_recording(basepath)
+        marks_path = self.save_markers(basepath.with_suffix(".marks"))
+        return rec_path, marks_path
+
     def _options_json(self) -> str:
         opts = {
             "height": self.height,
