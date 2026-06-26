@@ -1,0 +1,27 @@
+{
+  "name": "fhrpy",
+  "version": "1.0.0",
+  "description": "**Python toolbox for Fetal Heart Rate (FHR) / cardiotocography (CTG) analysis**, with a clean web-based CTG viewer.",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs",
+    "example": "examples",
+    "test": "tests"
+  },
+  "scripts": {},
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/data-coeur/FHRPY.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/data-coeur/FHRPY/issues"
+  },
+  "homepage": "https://github.com/data-coeur/FHRPY#readme",
+  "devDependencies": {
+    "@playwright/test": "^1.61.1",
+    "@types/node": "^26.0.1"
+  }
+}
