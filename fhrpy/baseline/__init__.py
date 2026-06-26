@@ -7,6 +7,7 @@ NumPy port of the FHRMA Weighted Median Filter Baseline (WMFB) algorithm
 from .wmfb import (
     WMFBResult,
     analyze,
+    detect_contractions,
     simpleaddetection,
     startendlist,
     validaccident,
@@ -16,6 +17,7 @@ from .wmfb import (
 __all__ = [
     "wmfb",
     "analyze",
+    "detect_contractions",
     "WMFBResult",
     "simpleaddetection",
     "validaccident",

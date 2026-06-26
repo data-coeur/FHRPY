@@ -544,14 +544,42 @@ def simpleaddetection(fhr, baseline):
 # ---------------------------------------------------------------------------
 # Convenience: analyse a loaded FHRRecord
 # ---------------------------------------------------------------------------
+def detect_contractions(source, fs: float = 4.0):
+    """Detect uterine contractions from the TOCO (tocometry) signal.
+
+    Port of the amnio MATLAB approach (``computeFeaturesAmnio.m``):
+    ``[~, contraction, ~] = BLsam(TOCO * 2)`` — the contractions are the
+    *accelerations* found by the very same WMFB morphological detector applied to
+    the (doubled) TOCO signal. The ``*2`` matches FHRMA's ``fhropen`` scaling so
+    the detector's absolute thresholds (≥ 15 amplitude over ≥ 15 s) line up.
+
+    Parameters
+    ----------
+    source:
+        Either an :class:`fhrpy.io.FHRRecord` (its ``.toco`` is used) or a 1-D
+        TOCO array at ``fs`` Hz (in the FHRPY ``byte/2`` scale).
+
+    Returns
+    -------
+    list[(start_s, end_s)]
+        Contraction segments, in **seconds**. Empty if TOCO is missing/flat.
+    """
+    toco = getattr(source, "toco", source)
+    toco = np.asarray(toco, dtype=np.float64).ravel()
+    if toco.size == 0 or not np.any(toco > 0):
+        return []
+    # contractions == the "accelerations" of BLsam(TOCO*2)
+    return wmfb(toco * 2.0, fs=fs, return_result=True).accelerations
+
+
 def analyze(record, unreliable_signal=None, return_result: bool = False):
     """Preprocess then run WMFB on a loaded :class:`fhrpy.io.FHRRecord`.
 
     Returns a dict with ``baseline``, ``fhri``, ``accelerations``,
-    ``decelerations``, ``false_acc``, ``false_dec``, ``contractions`` (a
-    placeholder ``None`` -- there is no contraction algorithm in the FHRMA core;
-    TOCO is carried through unchanged), and ``d``/``f`` (first/last valid
-    sample). Accel/decel are lists of ``(start_s, end_s)``.
+    ``decelerations``, ``false_acc``, ``false_dec``, ``contractions`` (uterine
+    contractions detected from TOCO, see :func:`detect_contractions`), and
+    ``d``/``f`` (first/last valid sample). Accel/decel/contractions are lists of
+    ``(start_s, end_s)``.
     """
     from ..preprocess.preprocess import preprocess
 
@@ -569,7 +597,8 @@ def analyze(record, unreliable_signal=None, return_result: bool = False):
         "decelerations": dec,
         "false_acc": facc,
         "false_dec": fdec,
-        "contractions": None,  # out of scope in the FHRMA core (see spec section 4.4)
+        # uterine contractions = accelerations of BLsam(TOCO*2) (amnio port)
+        "contractions": detect_contractions(record),
         "d": d,
         "f": f,
     }

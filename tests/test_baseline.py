@@ -96,7 +96,8 @@ def test_analyze_record():
         ["baseline", "fhri", "accelerations", "decelerations", "contractions"]
     ).issubset(res.keys())
     assert len(res["baseline"]) == len(rec)
-    assert res["contractions"] is None  # out of scope in the FHRMA core
+    # contractions are now detected from TOCO (amnio BLsam(TOCO*2) port)
+    assert isinstance(res["contractions"], list)
     assert not np.isnan(res["baseline"]).any()
 
 

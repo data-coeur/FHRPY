@@ -13,7 +13,8 @@ FHRPY is a focused Python port of the MATLAB
   maternal/fetal heart-rate confusion, with NumPy inference (no TensorFlow needed)
   and the training code included.
 - **Baseline estimation** — the **WMFB** method (Weighted Median Filter Bank) plus
-  morphological analysis (accelerations, decelerations).
+  morphological analysis (accelerations, decelerations, and uterine
+  **contractions** detected from the TOCO signal).
 - **File I/O** for `.fhr` / `.rcf` / `.rcfm` / `.dat` formats and the reference datasets.
 - A **web CTG viewer** that runs locally (Python UI), inline in Jupyter notebooks
   (VSCode and Google Colab), and as standalone offline HTML — no PHP required.
@@ -102,7 +103,7 @@ fs["prob"], fs["mask"], fs["segments"]      # per-sample P(false) + episodes
 |--------|---------|
 | `fhrpy.io` | Read/write `.fhr` `.rcf` `.rcfm` `.dat` (faithful to `fhropen.m`/`fhrsave.m`) |
 | `fhrpy.preprocess` | Filtering, interpolation, resampling (NumPy ports of the DSP helpers) |
-| `fhrpy.baseline` | WMFB baseline + acceleration/deceleration detection |
+| `fhrpy.baseline` | WMFB baseline + acceleration/deceleration + TOCO contraction detection |
 | `fhrpy.falsesignal` | False-signal (MHR/FHR confusion) detection — NumPy inference |
 | `fhrpy.training` | The original false-signal model training sources (Keras) |
 | `fhrpy.viewer` | The web CTG viewer + its Python wrapper |

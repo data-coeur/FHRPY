@@ -258,7 +258,8 @@ class FHRViewer:
             # The JS reads ``.rcfa`` as a fixed 12 bytes/sample layout (MHR present).
             self.data = encode_fhr(rec, with_mhr=True, with_analysis=True, header_bytes=8)
             self.ext = "rcfa"
-            for typ, key in (("ACC", "accelerations"), ("DEC", "decelerations")):
+            for typ, key in (("ACC", "accelerations"), ("DEC", "decelerations"),
+                             ("CON", "contractions")):
                 for seg in ma.get(key) or []:
                     samp = int(round(float(seg[0]) * fs))
                     dur = int(round((float(seg[1]) - float(seg[0])) * fs))
