@@ -14,7 +14,7 @@ A single place to review the project state from the repository browser
 | 1 | PHP-free web CTG viewer + Python wrapper | ✅ first cut (issue #2) |
 | 3 | WMFB baseline + morphology (NumPy) | ✅ core (issue #4) + wired into viewer |
 | — | File I/O `.fhr/.rcf/.rcfm/.dat` (MATLAB-parity) | ✅ done |
-| 2 | False-signal detection (`fhrma-fs`) | 🔄 inference ported & unit-tested (issue #3) |
+| 2 | False-signal detection (`fhrma-fs`) | ✅ ported + evaluated: AUC 0.978, sens 0.985 (issue #3) |
 | — | MATLAB parity via Octave docker | ✅ io/preprocess EXACT, WMFB ~0.27 bpm (issue #4) |
 | 4 | Full README + demos + AIM-CTG recruiting | ✅ README done (AIM-CTG text + demos pending) |
 | 5 | MLOps real-time inference server | 🔄 CPU benchmark: 12×3h in ~30 s on 4 cores (target met, issue #6) |
@@ -46,6 +46,11 @@ following the FHR, **red deceleration zones** aligned with the **TOCO
 contractions** below (physiologically coherent late/variable decels):
 
 ![analyzed](screenshots/etape3-analyzed-baseline-zones.png)
+
+**False-signal detection** (`false_signals=True`) — grey `$URS` zones mark where
+the Doppler FHR likely tracks the maternal HR, over baseline + decel zones:
+
+![false-signal](screenshots/etape2-false-signal-zones.png)
 
 **3 cm/min paper speed** (`3cm` button):
 
