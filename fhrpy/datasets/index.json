@@ -6,6 +6,7 @@
       "markers": "ctg/ctg_example_01.fhrh",
       "kind": "doppler",
       "false_signals": true,
+      "label": "Doppler and Scalp Stage2 at min 215",
       "duration_min": 225.7,
       "expulsion_min": 215,
       "description": "FHRMA Examples \u2014 Example 1 Doppler and Scalp Stage2 at min 215 (full Doppler CTG, expulsion at min 215)."
@@ -16,9 +17,109 @@
       "markers": "ctg/ctg_example_02.fhrh",
       "kind": "doppler",
       "false_signals": true,
+      "label": "Doppler Pattern D Stage 2 at min 275",
+      "duration_min": 291.7,
+      "expulsion_min": 275,
+      "description": "FHRMA Examples \u2014 Example 2 Doppler Pattern D Stage 2 at min 275 (full Doppler CTG, expulsion at min 275)."
+    },
+    {
+      "name": "ctg_example_03",
+      "file": "ctg/ctg_example_03.fhrm",
+      "markers": "ctg/ctg_example_03.fhrh",
+      "kind": "doppler",
+      "false_signals": true,
+      "label": "Doppler and Scalp Stage 2 at min 502",
+      "duration_min": 518.6,
+      "expulsion_min": 502,
+      "description": "FHRMA Examples \u2014 Example 3 Doppler and Scalp Stage 2 at min 502 (full Doppler CTG, expulsion at min 502)."
+    },
+    {
+      "name": "ctg_example_04",
+      "file": "ctg/ctg_example_04.fhrm",
+      "markers": "ctg/ctg_example_04.fhrh",
+      "kind": "doppler",
+      "false_signals": true,
+      "label": "Doppler stage 2 at min 360",
+      "duration_min": 372.4,
+      "expulsion_min": 360,
+      "description": "FHRMA Examples \u2014 Example 4 Doppler stage 2 at min 360 (full Doppler CTG, expulsion at min 360)."
+    },
+    {
+      "name": "ctg_example_05",
+      "file": "ctg/ctg_example_05.fhrm",
+      "markers": "ctg/ctg_example_05.fhrh",
+      "kind": "doppler",
+      "false_signals": true,
+      "label": "Doppler No real baseline Stage 2 at min 330",
+      "duration_min": 356.6,
+      "expulsion_min": 330,
+      "description": "FHRMA Examples \u2014 Example 5 Doppler No real baseline Stage 2 at min 330 (full Doppler CTG, expulsion at min 330)."
+    },
+    {
+      "name": "ctg_example_06",
+      "file": "ctg/ctg_example_06.fhrm",
+      "markers": "ctg/ctg_example_06.fhrh",
+      "kind": "doppler",
+      "false_signals": true,
+      "label": "Doppler Stage 2 at min 247",
       "duration_min": 272.0,
       "expulsion_min": 247,
       "description": "FHRMA Examples \u2014 Example 6 Doppler Stage 2 at min 247 (full Doppler CTG, expulsion at min 247)."
+    },
+    {
+      "name": "ctg_example_07",
+      "file": "ctg/ctg_example_07.fhrm",
+      "markers": "ctg/ctg_example_07.fhrh",
+      "kind": "doppler",
+      "false_signals": true,
+      "label": "Doppler Long FS Stage 2 at min 475",
+      "duration_min": 486.9,
+      "expulsion_min": 475,
+      "description": "FHRMA Examples \u2014 Example 7 Doppler Long FS Stage 2 at min 475 (full Doppler CTG, expulsion at min 475)."
+    },
+    {
+      "name": "ctg_example_08",
+      "file": "ctg/ctg_example_08.fhrm",
+      "markers": "ctg/ctg_example_08.fhrh",
+      "kind": "doppler",
+      "false_signals": true,
+      "label": "Doppler Stage 2 at min 318",
+      "duration_min": 388.2,
+      "expulsion_min": 318,
+      "description": "FHRMA Examples \u2014 Example 8 Doppler Stage 2 at min 318 (full Doppler CTG, expulsion at min 318)."
+    },
+    {
+      "name": "ctg_example_09",
+      "file": "ctg/ctg_example_09.fhrm",
+      "markers": "ctg/ctg_example_09.fhrh",
+      "kind": "doppler",
+      "false_signals": true,
+      "label": "Doppler Stage 2 at min 497",
+      "duration_min": 526.9,
+      "expulsion_min": 497,
+      "description": "FHRMA Examples \u2014 Example 9 Doppler Stage 2 at min 497 (full Doppler CTG, expulsion at min 497)."
+    },
+    {
+      "name": "ctg_example_10",
+      "file": "ctg/ctg_example_10.fhrm",
+      "markers": "ctg/ctg_example_10.fhrh",
+      "kind": "doppler",
+      "false_signals": true,
+      "label": "Doppler Stage 2 at min 580",
+      "duration_min": 599.7,
+      "expulsion_min": 580,
+      "description": "FHRMA Examples \u2014 Example 10 Doppler Stage 2 at min 580 (full Doppler CTG, expulsion at min 580)."
+    },
+    {
+      "name": "ctg_example_11",
+      "file": "ctg/ctg_example_11.fhrm",
+      "markers": "ctg/ctg_example_11.fhrh",
+      "kind": "doppler",
+      "false_signals": true,
+      "label": "Doppler Stage 2 at min 365",
+      "duration_min": 392.9,
+      "expulsion_min": 365,
+      "description": "FHRMA Examples \u2014 Exemple 11 Doppler Stage 2 at min 365 (full Doppler CTG, expulsion at min 365)."
     }
   ],
   "morpho": [
