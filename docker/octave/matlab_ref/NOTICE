@@ -1,0 +1,43 @@
+PROVENANCE AND LICENSING OF THE FILES IN THIS DIRECTORY
+=======================================================
+
+The MATLAB/Octave sources in this folder (*.m) and the C filter source
+(multisigfilter.c, plus the Linux-portable derivative multisigfilter_oct.c) are
+taken from the FHR Morphological Analysis (FHRMA) Toolbox by Samuel Boudet
+(samuel.boudet@gmail.com, Faculte de Medecine et Maieutique):
+
+    https://github.com/utbm-vi/FHRMA   (and associated publications)
+    Boudet S. et al., "Fetal heart rate baseline computation with a weighted
+    median filter", Computers in Biology and Medicine, 2019.
+
+LICENSE
+-------
+These FHRMA files are licensed under the GNU General Public License v3
+(GPLv3), as stated in each file's header. They are the SAME author's work as
+the algorithms that the FHRPY package re-implements.
+
+WHY THEY ARE HERE
+-----------------
+They are included ONLY as a numerical PARITY REFERENCE: the Octave harness in
+this directory runs the original FHRMA code so that the independent NumPy ports
+in fhrpy/ can be validated for numerical faithfulness. They are NOT imported,
+linked, or shipped as part of the FHRPY Python package (which is MIT-licensed).
+They are build/test tooling, executed inside an isolated Docker container.
+
+This separation (GPLv3 reference code used only to test an independent MIT
+implementation, never distributed within the package) keeps the FHRPY package
+itself MIT-licensed. If these reference files are ever distributed, they remain
+under GPLv3 and must be accompanied by this notice and the full GPLv3 text
+(see the LICENSE file in the upstream FHRMA repository).
+
+FILES
+-----
+fhropen.m, preprocess.m, aamwmfb.m, butterfilt.m, avgwin.m, avgsubsamp.m,
+resamp.m, interpolFHR.m, linearinterpolation.m, removesmallpart.m,
+simpleaddetection.m, validaccident.m, startendlist.m   -- verbatim FHRMA sources.
+multisigfilter.c                                       -- verbatim FHRMA MEX source
+                                                          (Windows-only; kept for reference).
+multisigfilter_oct.c                                   -- Linux/Octave-buildable
+                                                          derivative: identical filter()
+                                                          arithmetic, Windows threading
+                                                          replaced by a sequential loop.

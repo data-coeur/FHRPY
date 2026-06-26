@@ -1,0 +1,32 @@
+# docker-compose v1 (1.29.x) compatible -- this repo's environment has the
+# legacy `docker-compose` binary, NOT the `docker compose` plugin.
+#
+# Builds the Octave parity image and runs run_reference.m. The repo is mounted
+# read-only at /work/repo (so we can read example_recording.fhr) and the host
+# out/ dir is mounted read-write at /work/out for the generated ref_*.mat.
+#
+# The MATLAB .m sources live in ./matlab_ref on the host and are mounted at
+# /opt/harness/matlab_ref; run_reference.m itself is mounted at
+# /opt/harness/run_reference.m. Bind-mounting (rather than COPY) means you can
+# edit the harness without rebuilding the image.
+version: "3.3"
+
+services:
+  octave-reference:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: fhrpy-octave-parity:9.2.0
+    working_dir: /work
+    environment:
+      # Space-separated absolute paths (inside the container) of .fhr files to
+      # process. run.sh sets this; default in run_reference.m is the example.
+      - FHR_FILES=${FHR_FILES:-/work/repo/examples/example_recording.fhr}
+    volumes:
+      - ../../:/work/repo:ro                       # the FHRPY repo (read-only)
+      - ./out:/work/out                            # generated references (rw)
+      - ./matlab_ref:/opt/harness/matlab_ref:ro    # original MATLAB sources
+      - ./run_reference.m:/opt/harness/run_reference.m:ro
+      # Extra dataset files (FHRMAdataset) are mounted by run.sh via an override
+      # when present; see run.sh.
+    command: ["octave", "--no-gui", "--eval", "run('/opt/harness/run_reference.m')"]
