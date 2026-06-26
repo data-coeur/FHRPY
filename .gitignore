@@ -29,6 +29,10 @@ env/
 scratch/
 *.log
 
+# Claude Code runtime
+.claude/scheduled_tasks.lock
+.claude/*.lock
+
 # Rust (optional native accel)
 target/
 
