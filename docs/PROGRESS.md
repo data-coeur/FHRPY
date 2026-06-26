@@ -14,7 +14,7 @@ A single place to review the project state from the repository browser
 | 1 | PHP-free web CTG viewer + Python wrapper | ✅ first cut (issue #2) |
 | 3 | WMFB baseline + morphology (NumPy) | ✅ core (issue #4) + wired into viewer |
 | — | File I/O `.fhr/.rcf/.rcfm/.dat` (MATLAB-parity) | ✅ done |
-| 2 | False-signal detection (`fhrma-fs`) | ✅ ported + evaluated: AUC 0.978, sens 0.985 (issue #3) |
+| 2 | False-signal detection (`fhrma-fs`) | ✅ ported + validated on held-out sets: DopMHRVal AUC 0.978 / ScalpVal AUC 0.966 (issue #3) |
 | — | MATLAB parity via Octave docker | ✅ io/preprocess EXACT, WMFB ~0.27 bpm (issue #4) |
 | 4 | Full README + demos + AIM-CTG recruiting | ✅ README done (AIM-CTG text + demos pending) |
 | 5 | MLOps real-time inference server | ✅ stdlib HTTP server + Docker; real bench 12×3h in ~40 s on 4 cores (issue #6) |
