@@ -110,11 +110,20 @@ docker/                optional GPU/Octave docker-compose (NOT required by main)
 - Root via SSH available: `home.samuelboudet.com`, user `sam` (sudo) — use sparingly.
 
 ## Tooling notes
-- `node`/`npm` NOT installed here → viewer JS must be hand-written vanilla ES
-  modules (no build step required) OR add a build step only if node is installed.
-- `docker compose` plugin not present (only `docker`); `docker-compose` v1 may
-  need install for Octave parity.
-- Playwright MCP available for browser testing/screenshots.
+- `node`/`npm` ARE now installed (node v22) and `@playwright/test` + browsers are
+  in `node_modules`. Run the e2e suite locally with
+  `NODE_PATH=node_modules npx playwright test --project=chromium`. The viewer JS
+  stays hand-written vanilla ES modules (no build step) by design.
+- **Docker rights are available on this box** (use docker-compose for the Octave
+  parity harness / heavy runs). `docker compose` plugin may be absent (only
+  `docker`); `docker-compose` v1 may need install.
+- Playwright: a local node Playwright works with `file://` URLs (used for the
+  screenshots). The **claude.ai Playwright MCP is cloud-hosted** — it cannot reach
+  `127.0.0.1` on this box, so prefer the local runner or `data:`/`file://`.
+- Jupyter is installed: `jupyter nbconvert --to notebook --execute` runs the demo
+  notebook end-to-end (used to validate it).
+- This is an externally-managed Python (PEP 668): `pip install` needs
+  `--break-system-packages`; deps (numpy/scipy/jinja2) are already present.
 
 ## Key facts about the data format (verify against matlab_analysis.md)
 - `.fhr`/`.rcfm`: ~4 Hz sampling; PHP math implied 32 bytes/sec on disk.
