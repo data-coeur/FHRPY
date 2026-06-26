@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FHR / CTG Viewer</title>
+<style>
+/*__CSS__*/
+html, body { margin: 0; padding: 0; }
+#fhr-host { width: 100%; }
+</style>
+</head>
+<body>
+<div id="fhr-host"></div>
+<script type="module">
+/*__JS__*/
+
+// --- inline data (filled by the Python side) ---------------------------
+const DATA_B64 = "{{DATA_B64}}";
+const EXT = "{{EXT}}";
+const MARKERS = {{MARKERS}};
+const OPTIONS = {{OPTIONS_JSON}};
+
+function b64ToArrayBuffer(b64) {
+  if (!b64) return null;
+  const bin = atob(b64);
+  const len = bin.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes.buffer;
+}
+
+const host = document.getElementById('fhr-host');
+const viewer = new FHRViewer(host, OPTIONS);
+window.fhrViewer = viewer;
+
+const buf = b64ToArrayBuffer(DATA_B64);
+if (buf) viewer.loadBuffer(buf, EXT);
+if (MARKERS && MARKERS.length) viewer.setMarkers(MARKERS);
+
+// Inbound control bridge: the host (Python via IPython.display.Javascript or
+// iframe.contentWindow.postMessage) can drive the viewer by posting messages.
+window.addEventListener('message', (e) => {
+  const m = e.data;
+  if (!m || m.target !== 'fhrviewer') return;
+  const { method, args } = m;
+  if (typeof viewer[method] === 'function') {
+    try { viewer[method](...(args || [])); } catch (err) { /* noop */ }
+  }
+});
+
+// signal readiness for tests / hosts
+host.dataset.ready = '1';
+</script>
+</body>
+</html>

@@ -1,0 +1,152 @@
+/*
+ * fhrviewer.css — self-contained styles for the vanilla FHRViewer.
+ * Extracted and cleaned from the legacy fhrviewer.css (bootstrap rules dropped).
+ */
+
+.fhr-viewer {
+  display: block;
+  height: 600px;
+  box-sizing: border-box;
+  font-family: Arial, Helvetica, sans-serif;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  user-select: none;
+}
+
+.fhr-viewer * {
+  box-sizing: border-box;
+}
+
+.fhr-viewer .graph {
+  position: relative;
+  min-width: 100px;
+  min-height: 100px;
+  height: calc(100% - 60px);
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.fhr-viewer .graph .background-canvas,
+.fhr-viewer .graph .frontground-svg {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.fhr-viewer .signalloss {
+  position: absolute;
+  z-index: 1;
+  top: 0;
+  right: 4px;
+  color: #080;
+  font-size: 1.1em;
+  pointer-events: none;
+}
+
+.fhr-viewer .eventTextEdit {
+  display: none;
+  position: absolute;
+  width: auto;
+  height: auto;
+  z-index: 2;
+  font: 16px Arial;
+  border: 1px solid #888;
+  resize: none;
+  overflow: hidden;
+}
+
+/* --- controllers bar --------------------------------------------------- */
+.fhr-viewer .controllers {
+  position: relative;
+  height: 40px;
+  margin: 8px 0;
+}
+
+.fhr-viewer .controller-icons {
+  position: absolute;
+  left: 0;
+  top: 0;
+  padding: 0 5px;
+  display: flex;
+  gap: 4px;
+}
+
+.fhr-viewer .btn-fhr-icons {
+  text-align: center;
+  vertical-align: middle;
+  padding: 0;
+  min-width: 36px;
+  height: 36px;
+  border: 1px solid #bbb;
+  border-radius: 5px;
+  background: #f6f6f6;
+  cursor: pointer;
+  font-size: 15px;
+  color: #333;
+}
+
+.fhr-viewer .btn-fhr-icons:hover {
+  background: #e8e8e8;
+}
+
+.fhr-viewer .btn-fhr-icons.active {
+  background: #cde6ff;
+  border-color: #5a9bd4;
+}
+
+/* --- scrollbar --------------------------------------------------------- */
+.fhr-viewer .fhr-viewer-scrollbar {
+  position: absolute;
+  right: 0;
+  top: 9px;
+  left: 360px;
+  background-color: rgba(0, 0, 0, 0.05);
+  box-shadow: inset 1px 1px 16px rgba(0, 0, 0, 0.1);
+  border-radius: 10px;
+  display: block;
+  height: 22px;
+  margin: 0;
+}
+
+.fhr-viewer .scrollbarDragger {
+  position: absolute;
+  min-width: 30px;
+  display: block;
+  width: 10%;
+  max-width: 100%;
+  left: 0;
+  height: 100%;
+  cursor: pointer;
+  z-index: 1;
+}
+
+.fhr-viewer .scrollbarDraggerBar {
+  background-color: #777;
+  box-shadow: inset 1px 0 0 rgba(255, 255, 255, 0.4), inset -1px 0 0 rgba(0, 0, 0, 0.2);
+  height: 18px;
+  margin: 2px;
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  border-radius: 8px;
+}
+
+/* --- resizebar --------------------------------------------------------- */
+.fhr-viewer .resizebar {
+  width: 100%;
+  height: 12px;
+  background-color: #ededed;
+  border-top: 1px solid #ddd;
+  cursor: row-resize;
+}
+
+@media screen and (max-width: 1000px) {
+  .fhr-viewer .fhr-viewer-scrollbar {
+    left: 300px;
+  }
+}
