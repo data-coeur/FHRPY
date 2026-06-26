@@ -26,6 +26,46 @@ TARGET_HOURS = 3.0
 TARGET_SECONDS = 60.0
 
 
+def _process_record(args) -> float:
+    """Worker: load + tile the example to ~`hours` h, run WMFB + FS, return seconds."""
+    import time as _t
+
+    import numpy as np
+
+    from fhrpy.baseline import analyze
+    from fhrpy.falsesignal import detect_false_signals
+    from fhrpy.io import read_fhr
+
+    path, hours = args
+    rec = read_fhr(path, header=4)
+    n = len(rec)
+    reps = int(np.ceil(hours * 3600 * rec.fs / n))
+    for ch in ("fhr1", "fhr2", "mhr", "toco"):
+        setattr(rec, ch, np.tile(getattr(rec, ch), reps))
+    t = _t.perf_counter()
+    analyze(rec)
+    detect_false_signals(rec, kind="doppler")
+    return _t.perf_counter() - t
+
+
+def bench_parallel(n_records: int = 12, hours: float = 3.0, workers: int = 4) -> None:
+    """Real (not extrapolated) multi-process throughput on a 2-4 core budget."""
+    import concurrent.futures as cf
+    import time
+
+    print(f"\n--- real parallel benchmark: {n_records} records of ~{hours:g} h, "
+          f"{workers} worker process(es) ---")
+    args = [(EXAMPLE, hours)] * n_records
+    t0 = time.perf_counter()
+    with cf.ProcessPoolExecutor(max_workers=workers) as ex:
+        per = list(ex.map(_process_record, args))
+    wall = time.perf_counter() - t0
+    print(f"  per-record CPU time : {min(per):.1f}-{max(per):.1f} s")
+    print(f"  total wall-clock    : {wall:.1f} s for {n_records} records on {workers} cores")
+    verdict = "MET" if wall <= TARGET_SECONDS else "NOT met"
+    print(f"  => target ({n_records} records <= {TARGET_SECONDS:g} s): {verdict}")
+
+
 def _best_of(fn, repeats: int = 3) -> float:
     best = float("inf")
     for _ in range(repeats):
@@ -58,8 +98,10 @@ def main() -> None:
     print(f"  {TARGET_RECORDS} records serial (1 core)          : {serial:.1f} s")
     print(f"  {TARGET_RECORDS} records on {cores} cores (ideal)         : {serial / cores:.1f} s")
     verdict = "MET" if serial / cores <= TARGET_SECONDS else "NOT met (needs optimization)"
-    print(f"  => target {verdict}")
+    print(f"  => target {verdict} (single-record timing extrapolated)")
 
 
 if __name__ == "__main__":
     main()
+    # Real parallel run on a 4-core budget (the server target is 2-4 cores).
+    bench_parallel(n_records=TARGET_RECORDS, hours=TARGET_HOURS, workers=4)
