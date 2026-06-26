@@ -114,12 +114,10 @@ class FHRViewer:
         self.timezone = float(timezone)
 
         self.markers = self._normalize_markers(markers)
+        self._do_analyze = bool(analyze)
 
-        if analyze and self.path is not None:
-            self._apply_analysis()
-
-        if self.false_signals and self.path is not None:
-            self._apply_false_signals()
+        if (analyze or self.false_signals) and self.path is not None:
+            self._apply_pipeline()
 
         self._iframe_id = "fhr_" + uuid.uuid4().hex[:12]
         self._server = None
@@ -152,66 +150,66 @@ class FHRViewer:
         # assume list of [sample, text]
         return [[int(m[0]), str(m[1])] for m in markers]
 
-    def _apply_analysis(self) -> None:
-        """Run the WMFB analysis and replace the payload with an analysed ``.rcfa``.
+    def _apply_pipeline(self) -> None:
+        """Run the analysis pipeline in the correct order and build the payload.
 
-        Computes the real baseline + preprocessed FHR and the acceleration /
-        deceleration segments, re-encodes the recording as a 12-byte ``.rcfa``
-        (carrying ``FHRi`` + ``baseline``), and prepends ``$ ACC`` / ``$ DEC``
-        period markers so the colored zones reflect the real analysis instead of
-        the flat-140 placeholder.
+        Order matters: **false-signal detection & removal happens BEFORE the WMFB
+        baseline**, so maternal/artefact samples don't distort the baseline. When
+        both are requested, the detected false-signal samples are removed from the
+        FHR before the baseline is computed. Detected episodes are shown as grey
+        ``$ URS`` zones; the baseline + accel/decel as ``$ ACC`` / ``$ DEC`` zones.
         """
         import numpy as np  # local import: keep the viewer importable without NumPy
 
-        from ..baseline import analyze as _analyze
-        from ..io import encode_fhr, read_fhr
-
-        rec = read_fhr(self.path)
-        res = _analyze(rec)
-        rec.fhri = np.asarray(res["fhri"], dtype=float)
-        rec.baseline = np.asarray(res["baseline"], dtype=float)
-
-        # The JS reads ``.rcfa`` as a fixed 12 bytes/sample layout (MHR present),
-        # so always include the MHR channel (zeros when the source had none).
-        self.data = encode_fhr(rec, with_mhr=True, with_analysis=True, header_bytes=8)
-        self.ext = "rcfa"
-
-        fs = float(getattr(rec, "fs", 4.0) or 4.0)
-        zone_marks = []
-        for typ, key in (("ACC", "accelerations"), ("DEC", "decelerations")):
-            for seg in res.get(key) or []:
-                start_s, end_s = float(seg[0]), float(seg[1])
-                samp = int(round(start_s * fs))
-                dur = int(round((end_s - start_s) * fs))
-                if dur > 0:
-                    zone_marks.append([samp, f"$ {typ} {dur}"])
-        # Period marks first, then any user marks (drawn order is sample-sorted anyway).
-        self.markers = zone_marks + self.markers
-        self.analyzed = True
-
-    def _apply_false_signals(self) -> None:
-        """Run the false-signal detector and inject ``$ URS`` grey shaded zones.
-
-        Each detected false-signal segment becomes a ``$ URS durSamp``
-        ("unreliable signal") period marker, which the JS ``drawPeriods`` shades
-        grey (``#55555533``, the same style as ``NTA``).
-        """
-        from ..falsesignal import detect_false_signals
         from ..io import read_fhr
 
         rec = read_fhr(self.path)
-        res = detect_false_signals(
-            rec, kind=self.false_signals_kind, stage2_start=self.stage2_start
-        )
         fs = float(getattr(rec, "fs", 4.0) or 4.0)
-        urs_marks = []
-        for start_s, end_s in res["segments"]:
-            samp = int(round(start_s * fs))
-            dur = int(round((end_s - start_s) * fs))
-            if dur > 0:
-                urs_marks.append([samp, f"$ URS {dur}"])
-        # URS marks first, then existing marks (drawn order is sample-sorted).
-        self.markers = urs_marks + self.markers
+        n = len(rec)
+        urs_marks, zone_marks = [], []
+
+        # 1) False-signal detection & removal (upstream of the baseline).
+        fs_mask = None
+        if self.false_signals:
+            from ..falsesignal import detect_false_signals
+
+            res = detect_false_signals(
+                rec, kind=self.false_signals_kind, stage2_start=self.stage2_start
+            )
+            fs_mask = np.asarray(res["mask"], dtype=bool)
+            for start_s, end_s in res["segments"]:
+                samp = int(round(start_s * fs))
+                dur = int(round((end_s - start_s) * fs))
+                if dur > 0:
+                    urs_marks.append([samp, f"$ URS {dur}"])
+
+        # 2) WMFB baseline + morphology, on the FS-cleaned signal.
+        if self._do_analyze:
+            from ..baseline import analyze as _analyze
+            from ..io import encode_fhr
+
+            if fs_mask is not None and fs_mask.any():
+                m = fs_mask[:n]
+                rec.fhr1 = rec.fhr1.copy()
+                rec.fhr2 = rec.fhr2.copy()
+                rec.fhr1[m] = 0  # 0 = lost signal -> treated as a gap by preprocess
+                rec.fhr2[m] = 0
+            ma = _analyze(rec)
+            rec.fhri = np.asarray(ma["fhri"], dtype=float)
+            rec.baseline = np.asarray(ma["baseline"], dtype=float)
+            # The JS reads ``.rcfa`` as a fixed 12 bytes/sample layout (MHR present).
+            self.data = encode_fhr(rec, with_mhr=True, with_analysis=True, header_bytes=8)
+            self.ext = "rcfa"
+            for typ, key in (("ACC", "accelerations"), ("DEC", "decelerations")):
+                for seg in ma.get(key) or []:
+                    samp = int(round(float(seg[0]) * fs))
+                    dur = int(round((float(seg[1]) - float(seg[0])) * fs))
+                    if dur > 0:
+                        zone_marks.append([samp, f"$ {typ} {dur}"])
+            self.analyzed = True
+
+        # URS first, then ACC/DEC, then any user marks (drawn order is sample-sorted).
+        self.markers = urs_marks + zone_marks + self.markers
 
     # ------------------------------------------------------------------ #
     # saving (recording + marker file)
