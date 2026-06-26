@@ -1,0 +1,18 @@
+# FHRPY inference server (Étape 5). Build context is the repo root.
+#   docker-compose -f docker/server/docker-compose.yml up --build
+version: "3.8"
+services:
+  fhrpy-inference:
+    build:
+      context: ../..
+      dockerfile: docker/server/Dockerfile
+    image: fhrpy-inference:latest
+    ports:
+      - "8000:8000"
+    command: ["--workers", "4"]
+    deploy:
+      resources:
+        limits:
+          cpus: "4.0"
+          memory: 2g
+    restart: unless-stopped
