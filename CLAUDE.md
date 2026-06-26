@@ -24,9 +24,13 @@ utilities are ported as needed.
 License: **MIT**. Repo: https://github.com/data-coeur/FHRPY
 
 ## Source material (read-only references, NOT part of the repo)
-- MATLAB toolbox: `/home/sam/Desktop/fhr-demo/matlab/src/FHRMA/`
-- Web viewer (PHP + JS): `/home/sam/Desktop/fhr-demo/web/src/` (real readable JS
-  is in `web/src/old/js/*-source.js`)
+> On this machine the reference tree is at `/home/samuelboudet/Projets/fhr-demo/`.
+- MATLAB toolbox: `/home/samuelboudet/Projets/fhr-demo/matlab/src/FHRMA/`
+  (the 90 `test*.fhr` + 66 `train*.fhr` recordings and `expertAnalyses.mat` are
+  under `matlab/src/FHRMA/FHRMAdataset/{testdata,traindata,analyses}/`).
+- Web viewer (PHP + JS): `/home/samuelboudet/Projets/fhr-demo/web/src/` (real
+  readable JS is in `web/src/old/js/*-source.js`; legacy icons in
+  `web/src/old/images/`; print logic in `web/src/old/fileprint.php`)
 - Analysis notes (this session): `scratchpad/viewer_analysis.md`,
   `scratchpad/matlab_analysis.md`
 
