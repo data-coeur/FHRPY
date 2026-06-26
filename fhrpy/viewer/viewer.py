@@ -63,6 +63,11 @@ class FHRViewer:
         Linear-interpolate missing points when ``True``.
     zones:
         Show colored acc/dec/contraction zones when ``True`` (default).
+    analyze:
+        When ``True``, run the WMFB baseline + accel/decel analysis
+        (:func:`fhrpy.baseline.analyze`) on the recording and feed the real
+        baseline / preprocessed FHR / acceleration / deceleration zones to the
+        viewer (re-encoded as an analysed ``.rcfa`` payload). Requires NumPy/SciPy.
     """
 
     def __init__(
@@ -75,11 +80,13 @@ class FHRViewer:
         interpolate: bool = False,
         zones: bool = True,
         signals_per_graph: int | None = None,
+        analyze: bool = False,
         **opts,
     ):
         self.path = Path(path) if path is not None else None
         self.ext = self._infer_ext(self.path)
         self.data = self.path.read_bytes() if self.path else b""
+        self.analyzed = False
         self.height = int(height)
         self.scale = 3 if int(scale) == 3 else 1
         self.channels = list(channels) if channels else None
@@ -89,6 +96,9 @@ class FHRViewer:
         self._extra_opts = opts
 
         self.markers = self._normalize_markers(markers)
+
+        if analyze and self.path is not None:
+            self._apply_analysis()
 
         self._iframe_id = "fhr_" + uuid.uuid4().hex[:12]
         self._server = None
@@ -120,6 +130,43 @@ class FHRViewer:
             return out
         # assume list of [sample, text]
         return [[int(m[0]), str(m[1])] for m in markers]
+
+    def _apply_analysis(self) -> None:
+        """Run the WMFB analysis and replace the payload with an analysed ``.rcfa``.
+
+        Computes the real baseline + preprocessed FHR and the acceleration /
+        deceleration segments, re-encodes the recording as a 12-byte ``.rcfa``
+        (carrying ``FHRi`` + ``baseline``), and prepends ``$ ACC`` / ``$ DEC``
+        period markers so the colored zones reflect the real analysis instead of
+        the flat-140 placeholder.
+        """
+        import numpy as np  # local import: keep the viewer importable without NumPy
+
+        from ..baseline import analyze as _analyze
+        from ..io import encode_fhr, read_fhr
+
+        rec = read_fhr(self.path)
+        res = _analyze(rec)
+        rec.fhri = np.asarray(res["fhri"], dtype=float)
+        rec.baseline = np.asarray(res["baseline"], dtype=float)
+
+        # The JS reads ``.rcfa`` as a fixed 12 bytes/sample layout (MHR present),
+        # so always include the MHR channel (zeros when the source had none).
+        self.data = encode_fhr(rec, with_mhr=True, with_analysis=True, header_bytes=8)
+        self.ext = "rcfa"
+
+        fs = float(getattr(rec, "fs", 4.0) or 4.0)
+        zone_marks = []
+        for typ, key in (("ACC", "accelerations"), ("DEC", "decelerations")):
+            for seg in res.get(key) or []:
+                start_s, end_s = float(seg[0]), float(seg[1])
+                samp = int(round(start_s * fs))
+                dur = int(round((end_s - start_s) * fs))
+                if dur > 0:
+                    zone_marks.append([samp, f"$ {typ} {dur}"])
+        # Period marks first, then any user marks (drawn order is sample-sorted anyway).
+        self.markers = zone_marks + self.markers
+        self.analyzed = True
 
     def _options_json(self) -> str:
         opts = {

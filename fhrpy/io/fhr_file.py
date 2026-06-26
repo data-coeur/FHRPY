@@ -37,7 +37,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-__all__ = ["FHRRecord", "read_fhr", "write_fhr"]
+__all__ = ["FHRRecord", "read_fhr", "write_fhr", "encode_fhr"]
 
 # Bit layout of the quality/sensor byte (matches fhrsave.m).
 _Q_FLAGS = (
@@ -160,22 +160,19 @@ def read_fhr(filename: str | os.PathLike, header: str | int = "auto") -> FHRReco
     )
 
 
-def write_fhr(
-    filename: str | os.PathLike,
+def encode_fhr(
     record: FHRRecord,
     *,
     with_mhr: bool | None = None,
     with_analysis: bool = False,
     header_bytes: int = 4,
-) -> None:
-    """Write an :class:`FHRRecord` to a FHRMA binary file (mirrors ``fhrsave.m``).
+) -> bytes:
+    """Encode an :class:`FHRRecord` to FHRMA binary bytes (mirrors ``fhrsave.m``).
 
-    By default writes a 4-byte (timestamp-only) header, matching the MATLAB
-    toolbox. Set ``with_mhr`` to force/skip the MHR channel (defaults to whether
-    the record carries a non-empty MHR). Set ``with_analysis`` to append the
-    ``fhri``/``baseline`` channels.
+    With ``header_bytes=8`` a recorder-style header (zero ``magic`` +
+    ``timestamp``) is written; the analysed ``.rcfa`` layout (12 bytes/sample,
+    FHRi @8, baseline @10) is produced by ``with_mhr=True, with_analysis=True``.
     """
-    filename = os.fspath(filename)
     if with_mhr is None:
         with_mhr = bool(np.any(record.mhr))
 
@@ -211,5 +208,29 @@ def write_fhr(
         if with_analysis:
             out += fhri[i].tobytes() + base[i].tobytes()
 
+    return bytes(out)
+
+
+def write_fhr(
+    filename: str | os.PathLike,
+    record: FHRRecord,
+    *,
+    with_mhr: bool | None = None,
+    with_analysis: bool = False,
+    header_bytes: int = 4,
+) -> None:
+    """Write an :class:`FHRRecord` to a FHRMA binary file (mirrors ``fhrsave.m``).
+
+    By default writes a 4-byte (timestamp-only) header, matching the MATLAB
+    toolbox. Set ``with_mhr`` to force/skip the MHR channel (defaults to whether
+    the record carries a non-empty MHR). Set ``with_analysis`` to append the
+    ``fhri``/``baseline`` channels.
+    """
+    filename = os.fspath(filename)
+    data = encode_fhr(
+        record, with_mhr=with_mhr, with_analysis=with_analysis, header_bytes=header_bytes
+    )
     with open(filename, "wb") as f:
-        f.write(out)
+        f.write(data)
+
+
