@@ -288,6 +288,7 @@ class GraphPlot {
     this.interpolate = false;
     this.interpMaxGap = 4 * 30; // bridge gaps up to 30 s by default
     this.channels = null;       // explicit list of channels to display, else auto
+    this.tzOffset = 0;          // time-axis offset in seconds (0 = UTC; epoch 0 -> 00:00)
 
     this.bufferCanvas = document.createElement('canvas');
     this.bufferContext = this.bufferCanvas.getContext('2d');
@@ -492,11 +493,12 @@ class GraphPlot {
     ctx.fillStyle = '#000000';
     const t = new Date();
     const secGap = 600 / (1 + this.is3cm);
+    const tz = this.tzOffset || 0; // seconds; 0 = UTC so an epoch-0 (anonymised) start reads 00:00
     for (let i = 0; i < this.winlength / secGap; i++) {
       const textx = this.BorderLeft + ((secGap - (this.time % secGap) + i * secGap) / this.winlength) * this.graphWidth;
       const texty = this.TotalHeight - this.BorderBottom;
-      t.setTime((Math.floor(this.time / secGap + 1) + i) * secGap * 1000);
-      const text = ('00' + t.getHours()).slice(-2) + 'h' + ('00' + t.getMinutes()).slice(-2);
+      t.setTime(((Math.floor(this.time / secGap + 1) + i) * secGap + tz) * 1000);
+      const text = ('00' + t.getUTCHours()).slice(-2) + 'h' + ('00' + t.getUTCMinutes()).slice(-2);
       ctx.fillText(text, textx, texty);
     }
     this.hline(this.BorderLeft, this.TotalWidth - this.BorderRight, this.TotalHeight - this.BorderBottom, 1, '#000000');
@@ -868,6 +870,7 @@ export class FHRViewer {
     else if (typeof opts.signalsPerGraph === 'number') {
       this.graph.channels = ['FHRi', 'FHR1', 'FHR2', 'MHR'].slice(0, opts.signalsPerGraph);
     }
+    if (typeof opts.tzOffset === 'number') this.graph.tzOffset = opts.tzOffset;
     if (opts.scale === 3) this.graph.is3cm = 1;
     if (opts.interpolate) this.graph.interpolate = true;
     if (opts.zones === false) this.graph.displayMorpho = false;
@@ -1135,6 +1138,14 @@ export class FHRViewer {
   }
 
   toggle3cm() { return this.setScale(this.graph.is3cm ? 1 : 3); }
+
+  /** Set the time-axis timezone offset in seconds (0 = UTC). */
+  setTimezone(offsetSeconds) {
+    this.graph.tzOffset = Number(offsetSeconds) || 0;
+    this.graph.redraw();
+    this._emit('timezoneChange', { offsetSeconds: this.graph.tzOffset });
+    return this;
+  }
 
   setHeight(px) {
     this.host.style.height = `${px}px`;

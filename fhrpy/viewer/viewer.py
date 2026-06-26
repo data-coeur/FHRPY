@@ -91,6 +91,7 @@ class FHRViewer:
         false_signals: bool = False,
         false_signals_kind: str = "doppler",
         stage2_start: int | None = None,
+        timezone: float = 0.0,
         **opts,
     ):
         self.path = Path(path) if path is not None else None
@@ -108,6 +109,9 @@ class FHRViewer:
         self.false_signals = bool(false_signals)
         self.false_signals_kind = false_signals_kind
         self.stage2_start = stage2_start
+        # Time-axis timezone, in hours east of UTC. Default 0 (UTC) so an
+        # anonymised epoch-0 start reads 00:00 on the time axis.
+        self.timezone = float(timezone)
 
         self.markers = self._normalize_markers(markers)
 
@@ -265,6 +269,7 @@ class FHRViewer:
             "scale": self.scale,
             "interpolate": self.interpolate,
             "zones": self.zones,
+            "tzOffset": int(round(self.timezone * 3600)),
         }
         if self.channels:
             opts["channels"] = self.channels
@@ -422,6 +427,11 @@ class FHRViewer:
     def set_scale(self, cm_per_min: int):
         self.scale = 3 if int(cm_per_min) == 3 else 1
         return self._post("setScale", self.scale)
+
+    def set_timezone(self, hours: float):
+        """Set the time-axis timezone, in hours east of UTC (0 = UTC)."""
+        self.timezone = float(hours)
+        return self._post("setTimezone", int(round(self.timezone * 3600)))
 
     def set_channel_visible(self, name: str, visible: bool):
         return self._post("setChannelVisible", name, bool(visible))
