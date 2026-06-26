@@ -35,6 +35,10 @@ include = ["fhrpy*"]
 
 [tool.setuptools.package-data]
 "fhrpy.viewer" = ["web/**/*"]
+"fhrpy.falsesignal" = ["weights/*.mat"]
+# The TensorFlow training sources in fhrpy/training/ require TensorFlow 2 to run,
+# but TF is intentionally NOT a dependency: it is never imported by the package.
+"fhrpy.training" = ["*.ipynb", "*.py", "README.md"]
 
 [tool.ruff]
 line-length = 100

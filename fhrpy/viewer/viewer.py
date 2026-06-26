@@ -68,6 +68,13 @@ class FHRViewer:
         (:func:`fhrpy.baseline.analyze`) on the recording and feed the real
         baseline / preprocessed FHR / acceleration / deceleration zones to the
         viewer (re-encoded as an analysed ``.rcfa`` payload). Requires NumPy/SciPy.
+    false_signals:
+        When ``True``, run the false-signal detector
+        (:func:`fhrpy.falsesignal.detect_false_signals`) and inject the detected
+        false-signal episodes as grey ``$ URS`` ("unreliable signal") shaded
+        zones. ``false_signals_kind`` selects the model (``"doppler"`` default or
+        ``"scalp"``); ``stage2_start`` is the optional 4 Hz second-stage sample
+        index. Requires NumPy/SciPy.
     """
 
     def __init__(
@@ -81,6 +88,9 @@ class FHRViewer:
         zones: bool = True,
         signals_per_graph: int | None = None,
         analyze: bool = False,
+        false_signals: bool = False,
+        false_signals_kind: str = "doppler",
+        stage2_start: int | None = None,
         **opts,
     ):
         self.path = Path(path) if path is not None else None
@@ -95,10 +105,17 @@ class FHRViewer:
         self.signals_per_graph = signals_per_graph
         self._extra_opts = opts
 
+        self.false_signals = bool(false_signals)
+        self.false_signals_kind = false_signals_kind
+        self.stage2_start = stage2_start
+
         self.markers = self._normalize_markers(markers)
 
         if analyze and self.path is not None:
             self._apply_analysis()
+
+        if self.false_signals and self.path is not None:
+            self._apply_false_signals()
 
         self._iframe_id = "fhr_" + uuid.uuid4().hex[:12]
         self._server = None
@@ -167,6 +184,30 @@ class FHRViewer:
         # Period marks first, then any user marks (drawn order is sample-sorted anyway).
         self.markers = zone_marks + self.markers
         self.analyzed = True
+
+    def _apply_false_signals(self) -> None:
+        """Run the false-signal detector and inject ``$ URS`` grey shaded zones.
+
+        Each detected false-signal segment becomes a ``$ URS durSamp``
+        ("unreliable signal") period marker, which the JS ``drawPeriods`` shades
+        grey (``#55555533``, the same style as ``NTA``).
+        """
+        from ..falsesignal import detect_false_signals
+        from ..io import read_fhr
+
+        rec = read_fhr(self.path)
+        res = detect_false_signals(
+            rec, kind=self.false_signals_kind, stage2_start=self.stage2_start
+        )
+        fs = float(getattr(rec, "fs", 4.0) or 4.0)
+        urs_marks = []
+        for start_s, end_s in res["segments"]:
+            samp = int(round(start_s * fs))
+            dur = int(round((end_s - start_s) * fs))
+            if dur > 0:
+                urs_marks.append([samp, f"$ URS {dur}"])
+        # URS marks first, then existing marks (drawn order is sample-sorted).
+        self.markers = urs_marks + self.markers
 
     def _options_json(self) -> str:
         opts = {
