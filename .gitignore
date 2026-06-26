@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# Jupyter
+*.nbconvert.ipynb
+
+# OS / editors
+.DS_Store
+*.swp
+
+# Secrets — never commit
+*.token
+.env
+.git-credentials
+
+# Local scratch / large artifacts
+scratch/
+*.log
+
+# Rust (optional native accel)
+target/
