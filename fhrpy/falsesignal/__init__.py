@@ -8,6 +8,7 @@ TensorFlow — weights are loaded from the bundled ``FSDop.mat`` / ``FSScalp.mat
 """
 
 from .detect import detect_false_signals, load_model, mask_to_segments
+from .evaluate import FSMetrics, evaluate_dataset
 from .features import (
     build_dop_features,
     build_scalp_features,
@@ -20,6 +21,8 @@ __all__ = [
     "detect_false_signals",
     "load_model",
     "mask_to_segments",
+    "evaluate_dataset",
+    "FSMetrics",
     "build_dop_features",
     "build_scalp_features",
     "normalize_hr",
