@@ -17,7 +17,7 @@ A single place to review the project state from the repository browser
 | 2 | False-signal detection (`fhrma-fs`) | 🔄 inference ported & unit-tested (issue #3) |
 | — | MATLAB parity via Octave docker | ✅ io/preprocess EXACT, WMFB ~0.27 bpm (issue #4) |
 | 4 | Full README + demos + AIM-CTG recruiting | ✅ README done (AIM-CTG text + demos pending) |
-| 5 | MLOps real-time inference server | 🔜 |
+| 5 | MLOps real-time inference server | 🔄 CPU benchmark: 12×3h in ~30 s on 4 cores (target met, issue #6) |
 
 Tests: run `pip install -e . && python3 -m pytest -q` (**43 passed, 4 skipped**;
 add the Octave references via `bash docker/octave/run.sh` to enable the 15 parity
