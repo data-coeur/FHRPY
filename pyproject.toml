@@ -37,7 +37,7 @@ include = ["fhrpy*"]
 "fhrpy.viewer" = ["web/**/*"]
 "fhrpy.falsesignal" = ["weights/*.mat"]
 # Bundled FHRMA example recordings + expert-label marker / baseline files.
-"fhrpy.datasets" = ["index.json", "morpho/*", "falsesig/*"]
+"fhrpy.datasets" = ["index.json", "ctg/*", "morpho/*", "falsesig/*"]
 # The TensorFlow training sources in fhrpy/training/ require TensorFlow 2 to run,
 # but TF is intentionally NOT a dependency: it is never imported by the package.
 "fhrpy.training" = ["*.ipynb", "*.py", "README.md"]

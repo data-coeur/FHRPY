@@ -3,11 +3,15 @@
 A small, self-contained subset of the public FHRMA datasets is shipped with
 FHRPY so the viewer and the methods can be tried without downloading anything:
 
-* ``morpho`` — morphological-analysis examples (expert **baseline** +
-  **acceleration / deceleration** zones), from the FHRMA morphological dataset.
-* ``falsesig`` — false-signal examples (expert **false-signal** episodes, shown
-  as ``$ URS`` zones) with the **expulsion** instant stored as a protected
-  ``£Expulsion`` marker (the ``£`` prefix marks a non-editable mark).
+* ``ctg`` — full Doppler recordings from the FHRMA *Examples* folder (the
+  showcase "analyse a complete CTG" examples); the 2nd-stage / **expulsion**
+  instant comes from the recording and is stored as a protected ``£Expulsion``
+  marker. These are the notebook's default examples.
+* ``morpho`` — morphological-analysis examples with the **expert** ground truth
+  (expert **baseline** + **acceleration / deceleration** zones), used to compare
+  expert labels vs the WMFB method.
+* ``falsesig`` — false-signal examples with the **expert** false-signal episodes
+  (shown as ``$ URS`` zones), used to compare expert labels vs the detector.
 
 All bundled recordings have their start timestamp zeroed, so they open at 00:00
 without needing a timezone. Expert labels live in companion ``.fhrh`` marker
@@ -102,7 +106,8 @@ def load_example(name: str, source: str = "expert", **viewer_opts):
     path = _DIR / e["file"]
 
     if source == "method":
-        return FHRViewer(path, analyze=True, false_signals=(category == "falsesig"),
+        run_fs = e.get("false_signals", category == "falsesig")
+        return FHRViewer(path, analyze=True, false_signals=run_fs,
                          false_signals_kind=e.get("kind", "doppler"), **viewer_opts)
     if source == "raw":
         return FHRViewer(path, **viewer_opts)

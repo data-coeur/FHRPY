@@ -1,4 +1,26 @@
 {
+  "ctg": [
+    {
+      "name": "ctg_example_01",
+      "file": "ctg/ctg_example_01.fhrm",
+      "markers": "ctg/ctg_example_01.fhrh",
+      "kind": "doppler",
+      "false_signals": true,
+      "duration_min": 225.7,
+      "expulsion_min": 215,
+      "description": "FHRMA Examples \u2014 Example 1 Doppler and Scalp Stage2 at min 215 (full Doppler CTG, expulsion at min 215)."
+    },
+    {
+      "name": "ctg_example_02",
+      "file": "ctg/ctg_example_02.fhrm",
+      "markers": "ctg/ctg_example_02.fhrh",
+      "kind": "doppler",
+      "false_signals": true,
+      "duration_min": 272.0,
+      "expulsion_min": 247,
+      "description": "FHRMA Examples \u2014 Example 6 Doppler Stage 2 at min 247 (full Doppler CTG, expulsion at min 247)."
+    }
+  ],
   "morpho": [
     {
       "name": "morpho_train19",
