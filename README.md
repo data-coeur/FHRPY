@@ -3,17 +3,36 @@
 **Python toolbox for Fetal Heart Rate (FHR) / cardiotocography (CTG) analysis**, with
 a clean, dependency-light web CTG viewer.
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/data-coeur/FHRPY/blob/main/examples/viewer_demo.ipynb)
+
 FHRPY is a focused Python port of the MATLAB
 [FHRMA](https://github.com/utsb-fmm/FHRMA) toolbox. It provides:
 
-- **Baseline estimation** — the **WMFB** method (Weighted Median Filter Bank) plus
-  morphological analysis (accelerations, decelerations).
 - **False-signal detection** (`fhrma-fs`) — deep-learning detection of Doppler
   maternal/fetal heart-rate confusion, with NumPy inference (no TensorFlow needed)
   and the training code included.
+- **Baseline estimation** — the **WMFB** method (Weighted Median Filter Bank) plus
+  morphological analysis (accelerations, decelerations).
 - **File I/O** for `.fhr` / `.rcf` / `.rcfm` / `.dat` formats and the reference datasets.
 - A **web CTG viewer** that runs locally (Python UI), inline in Jupyter notebooks
   (VSCode and Google Colab), and as standalone offline HTML — no PHP required.
+
+> The badges above: the **Colab** link opens the demo notebook (works once the
+> repository is public). A **CI** badge will be added when the test workflow is
+> enabled (see `docs/PROGRESS.md`).
+
+## Processing pipeline (order matters)
+
+The analysis stages run in this order — **false-signal detection comes first**, so
+that maternal/artefact samples are removed *before* the baseline is computed:
+
+```
+read_fhr → preprocess → false-signal detection & removal → WMFB baseline → accel/decel
+```
+
+Running baseline estimation on un-cleaned signal would let false signals distort
+the baseline, so `fhrma-fs` is applied (and its samples discarded) upstream.
 
 > ⚠️ **Status: under active development (pre-release).** APIs and formats may change
 > until the first validated release. See the [open issues](https://github.com/data-coeur/FHRPY/issues)
@@ -102,6 +121,16 @@ in analysed `.rcfa` files — preprocessed `FHRi` and `baseline`. Extensions:
 A real recording is bundled at `examples/example_recording.fhr` and a short
 `.rcfm` at `examples/sample.rcfm`. The full FHRMA morphological-analysis dataset
 and the false-signal datasets can be added on request — see issue #8.
+
+## Docker
+
+Docker is **optional** (the toolbox is pure Python). Two self-contained setups
+are provided, each with its own README:
+
+- **Inference server** — `docker/server/` ([README](docker/server/README.md)):
+  `docker-compose -f docker/server/docker-compose.yml up --build`.
+- **MATLAB-parity harness** (Octave) — `docker/octave/` ([README](docker/octave/README.md)):
+  `bash docker/octave/run.sh`.
 
 ## License
 
