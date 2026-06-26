@@ -13,6 +13,12 @@ authors = [{ name = "Samuel Boudet and contributors" }]
 keywords = ["cardiotocography", "CTG", "fetal heart rate", "FHR", "obstetrics", "signal processing"]
 dependencies = [
   "numpy>=1.21",
+  # SciPy is used for: Butterworth coefficient design (signal.butter / cheby1),
+  # plain causal IIR (lfilter) and polyphase resampling (resample_poly). The
+  # zero-phase filtfilt itself is reimplemented in pure NumPy (fhrpy.preprocess.dsp)
+  # to be bit-faithful to FHRMA's multisigfilter.c. resample_poly's padtype='line'
+  # requires SciPy >= 1.6.
+  "scipy>=1.6",
 ]
 
 [project.optional-dependencies]
