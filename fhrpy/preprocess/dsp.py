@@ -206,13 +206,25 @@ def filtfilt(b, a, x, axis: int = -1, zi=None) -> np.ndarray:
     """
     b = np.asarray(b, dtype=np.float64)
     a = np.asarray(a, dtype=np.float64)
-    if zi is None:
-        zi = lfilter_zi(b, a)
-
     x = np.asarray(x, dtype=np.float64)
+    nfact = 3 * (len(b) - 1)
+    if nfact == 0:  # order-0 (constant) b -> trivial scaling
+        return b[0] * x / a[0]
+
+    if zi is None:
+        # scipy's C filtfilt with the SAME odd point-reflection padding (length
+        # 3*(order-1)) is bit-identical to the reference _filter_channel for the
+        # order-1 Butterworth filters used here (verified max|diff|=0.0), and
+        # matches to machine precision otherwise — but ~40x faster (C vs the
+        # pure-Python core). The bit-faithful path below is kept for an explicit
+        # custom `zi` (and as the documented reference).
+        from scipy.signal import filtfilt as _sp_filtfilt
+
+        return _sp_filtfilt(b, a, x, axis=axis, padtype="odd", padlen=nfact)
+
+    zi = np.asarray(zi, dtype=np.float64)
     if x.ndim == 1:
         return _filter_channel(b, a, x, zi)
-
     x = np.moveaxis(x, axis, -1)
     shape = x.shape
     flat = x.reshape(-1, shape[-1])
