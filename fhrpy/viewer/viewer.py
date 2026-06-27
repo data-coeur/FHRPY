@@ -96,6 +96,8 @@ class FHRViewer:
         rcf_max: float | None = None,
         safe_min: float | None = None,
         safe_max: float | None = None,
+        analyze_contractions: bool = True,
+        analyze_decel_types: bool = True,
         **opts,
     ):
         self.path = Path(path) if path is not None else None
@@ -113,6 +115,10 @@ class FHRViewer:
         self.false_signals = bool(false_signals)
         self.false_signals_kind = false_signals_kind
         self.stage2_start = stage2_start
+        # Whether ``analyze`` also emits contraction (CON) zones and the
+        # per-deceleration type markers (early/late/variable/prolonged).
+        self.analyze_contractions = bool(analyze_contractions)
+        self.analyze_decel_types = bool(analyze_decel_types)
         # Time-axis timezone, in hours east of UTC. Default 0 (UTC) so an
         # anonymised epoch-0 start reads 00:00 on the time axis.
         self.timezone = float(timezone)
@@ -263,16 +269,19 @@ class FHRViewer:
             # The JS reads ``.rcfa`` as a fixed 12 bytes/sample layout (MHR present).
             self.data = encode_fhr(rec, with_mhr=True, with_analysis=True, header_bytes=8)
             self.ext = "rcfa"
-            for typ, key in (("ACC", "accelerations"), ("DEC", "decelerations"),
-                             ("CON", "contractions")):
+            ad_keys = [("ACC", "accelerations"), ("DEC", "decelerations")]
+            if self.analyze_contractions:
+                ad_keys.append(("CON", "contractions"))
+            for typ, key in ad_keys:
                 for seg in ma.get(key) or []:
                     samp = int(round(float(seg[0]) * fs))
                     dur = int(round((float(seg[1]) - float(seg[0])) * fs))
                     if dur > 0:
                         zone_marks.append([samp, f"$ {typ} {dur}"])
             # text label at each deceleration onset: early / late / variable / prolonged
-            for dt in ma.get("deceleration_types") or []:
-                zone_marks.append([int(round(float(dt["start_s"]) * fs)), dt["label"]])
+            if self.analyze_decel_types:
+                for dt in ma.get("deceleration_types") or []:
+                    zone_marks.append([int(round(float(dt["start_s"]) * fs)), dt["label"]])
             self.analyzed = True
 
         # URS first, then ACC/DEC, then any user marks (drawn order is sample-sorted).
