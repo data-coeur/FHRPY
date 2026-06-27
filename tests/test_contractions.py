@@ -45,3 +45,35 @@ def test_analyze_populates_contractions():
     ma = analyze(rec)
     assert ma["contractions"] is not None
     assert isinstance(ma["contractions"], list)
+
+
+def test_classify_decelerations_types_and_keys():
+    import numpy as np
+    from fhrpy.baseline import classify_decelerations
+
+    n = 4 * 600
+    baseline = np.full(n, 140.0)
+    fhri = baseline.copy()
+    # an abrupt, deep dip (variable severe): nadir ~60, reached in ~10 s
+    fhri[4 * 100: 4 * 110] = 60.0
+    # a gradual V-shaped dip far from any contraction, nadir 40 s in -> 'late'
+    grad = np.concatenate([np.linspace(140, 118, 4 * 40), np.linspace(118, 140, 4 * 40)])
+    fhri[4 * 300: 4 * 300 + len(grad)] = grad
+    decels = [(100, 110), (300, 380)]
+    res = classify_decelerations(decels, fhri, baseline, contractions=[])
+    assert len(res) == 2
+    for d in res:
+        assert {"start_s", "end_s", "type", "label", "amplitude",
+                "nadir", "duration", "time_to_nadir_s", "surface"} <= set(d)
+    assert res[0]["type"].startswith("variable")
+    assert res[0]["time_to_nadir_s"] < 30
+    # gradual onset (nadir ~40 s) with no contraction -> 'late'
+    assert res[1]["type"] == "late"
+
+
+def test_analyze_exposes_deceleration_types():
+    from fhrpy.baseline import analyze
+    rec = read_fhr(ds.example_path("morpho_train21"))
+    ma = analyze(rec)
+    assert isinstance(ma["deceleration_types"], list)
+    assert len(ma["deceleration_types"]) == len(ma["decelerations"])

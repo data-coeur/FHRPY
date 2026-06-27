@@ -265,6 +265,9 @@ class FHRViewer:
                     dur = int(round((float(seg[1]) - float(seg[0])) * fs))
                     if dur > 0:
                         zone_marks.append([samp, f"$ {typ} {dur}"])
+            # text label at each deceleration onset: early / late / variable / prolonged
+            for dt in ma.get("deceleration_types") or []:
+                zone_marks.append([int(round(float(dt["start_s"]) * fs)), dt["label"]])
             self.analyzed = True
 
         # URS first, then ACC/DEC, then any user marks (drawn order is sample-sorted).

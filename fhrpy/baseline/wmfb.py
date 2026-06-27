@@ -572,6 +572,68 @@ def detect_contractions(source, fs: float = 4.0):
     return wmfb(toco * 2.0, fs=fs, return_result=True).accelerations
 
 
+_DEC_TYPE_LABEL = {
+    "early": "early decel",
+    "late": "late decel",
+    "variable_severe": "variable decel (severe)",
+    "variable_moderate": "variable decel (moderate)",
+    "prolonged": "prolonged decel",
+}
+
+
+def classify_decelerations(decelerations, fhri, baseline, contractions=None, fs: float = 4.0):
+    """Classify each deceleration as early / late / variable / prolonged.
+
+    Port of the amnio ``computeFeaturesAmnio.m`` deceleration typing. For each
+    deceleration the depth ``baseline - FHRi`` gives the amplitude, nadir, and
+    the time-to-nadir (amnio's ``slope``). The rule:
+
+    * ``duration >= 120 s``                       -> **prolonged**;
+    * else ``time_to_nadir < 30 s`` (abrupt)      -> **variable** (severe if
+      amplitude > 60, nadir <= 70 or duration >= 60 s, else moderate);
+    * else (gradual): **late** if there is no overlapping contraction or the
+      deceleration starts >= 30 s after the contraction onset, else **early**.
+
+    Returns a list of dicts ``{start_s, end_s, type, label, amplitude, nadir,
+    duration, time_to_nadir_s, surface}`` (surface in bpm·min).
+    """
+    fhri = np.asarray(fhri, dtype=float)
+    baseline = np.asarray(baseline, dtype=float)
+    cons = list(contractions or [])
+    n = min(len(fhri), len(baseline))
+    out = []
+    for start_s, end_s in decelerations:
+        s = max(0, int(round(float(start_s) * fs)))
+        e = min(n, int(round(float(end_s) * fs)))
+        if not s < e:
+            continue
+        duration = float(end_s) - float(start_s)
+        sig = baseline[s:e] - fhri[s:e]
+        amplitude = float(np.max(sig))
+        surface = float(np.sum(sig)) / (fs * 60.0)
+        idx = int(np.argmin(fhri[s:e]))
+        nadir = float(fhri[s:e][idx])
+        time_to_nadir = idx / fs
+        offset = None
+        for cs, ce in cons:
+            if ce >= start_s and cs <= end_s:
+                offset = float(start_s) - float(cs)
+                break
+        if duration >= 120:
+            typ = "prolonged"
+        elif time_to_nadir < 30:
+            severe = amplitude > 60 or nadir <= 70 or duration >= 60
+            typ = "variable_severe" if severe else "variable_moderate"
+        else:
+            typ = "late" if (offset is None or offset >= 30) else "early"
+        out.append({
+            "start_s": float(start_s), "end_s": float(end_s), "type": typ,
+            "label": _DEC_TYPE_LABEL[typ], "amplitude": amplitude, "nadir": nadir,
+            "duration": duration, "time_to_nadir_s": time_to_nadir, "surface": surface,
+        })
+    return out
+
+
 def analyze(record, unreliable_signal=None, return_result: bool = False):
     """Preprocess then run WMFB on a loaded :class:`fhrpy.io.FHRRecord`.
 
@@ -587,6 +649,8 @@ def analyze(record, unreliable_signal=None, return_result: bool = False):
         record.fhr1, record.fhr2, record.toco, unreliable_signal
     )
     baseline, acc, dec, facc, fdec = wmfb(fhri)
+    # uterine contractions = accelerations of BLsam(TOCO*2) (amnio port)
+    contractions = detect_contractions(record)
 
     result = {
         "baseline": baseline,
@@ -597,8 +661,9 @@ def analyze(record, unreliable_signal=None, return_result: bool = False):
         "decelerations": dec,
         "false_acc": facc,
         "false_dec": fdec,
-        # uterine contractions = accelerations of BLsam(TOCO*2) (amnio port)
-        "contractions": detect_contractions(record),
+        "contractions": contractions,
+        # per-deceleration type (early / late / variable / prolonged) — amnio port
+        "deceleration_types": classify_decelerations(dec, fhri, baseline, contractions),
         "d": d,
         "f": f,
     }
