@@ -13,7 +13,7 @@ from fhrpy.io import read_fhr
 def test_fsdop_torch_matches_numpy():
     from fhrpy.falsesignal.torch_backend import FSDopTorch
 
-    rec = read_fhr(ds.example_path("fs_dopmhr_01"))
+    rec = read_fhr(ds.example_path("fs_dopmhr_train0006"))
     ref = load_model("doppler")(build_dop_features(rec.fhr1, rec.mhr))[0]
     got = FSDopTorch(device="cpu", dtype=torch.float64).detect(rec.fhr1, rec.mhr)
     assert np.max(np.abs(ref - got)) < 1e-9
@@ -22,7 +22,7 @@ def test_fsdop_torch_matches_numpy():
 def test_fsscalp_torch_matches_numpy():
     from fhrpy.falsesignal.torch_backend import FSScalpTorch
 
-    rec = read_fhr(ds.example_path("fs_dopmhr_01"))
+    rec = read_fhr(ds.example_path("fs_dopmhr_train0006"))
     ref = load_model("scalp")(build_scalp_features(rec.fhr1)[0])
     got = FSScalpTorch(device="cpu", dtype=torch.float64).detect(rec.fhr1)
     assert np.max(np.abs(ref - got)) < 1e-9
@@ -42,7 +42,7 @@ def test_fstf_matches_numpy_if_available():
     tf = pytest.importorskip("tensorflow", reason="TF backend test needs TensorFlow")
     from fhrpy.falsesignal.tf_backend import FSDopTF
 
-    rec = read_fhr(ds.example_path("fs_dopmhr_01"))
+    rec = read_fhr(ds.example_path("fs_dopmhr_train0006"))
     ref = load_model("doppler")(build_dop_features(rec.fhr1, rec.mhr))[0]
     got = FSDopTF().detect(rec.fhr1, rec.mhr)
     assert np.max(np.abs(ref - got)) < 5e-3

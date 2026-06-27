@@ -8,10 +8,22 @@ from fhrpy.viewer import FHRViewer
 
 def test_registry_and_files_present():
     names = ds.example_names()
-    assert names, "no bundled examples registered"
-    for e in ds.list_examples():
-        assert ds.example_path(e["name"]).exists()
-        assert (ds._DIR / e["markers"]).exists()
+    assert len(names) > 1000, "expected the full bundled FHRMA datasets"
+    # spot-check a spread (there are 1200+ examples)
+    for e in ds.list_examples()[:40] + ds.list_examples("fs")[:5]:
+        p = ds.example_path(e["name"])
+        assert p.exists()
+        if e["labelled"]:
+            assert p.with_suffix(".fhrh").exists()
+
+
+def test_categories_and_naming():
+    names = set(ds.example_names())
+    assert "morpho_train01" in names and "morpho_test01" in names
+    assert "fs_dopmhr_train0001" in names and "fs_scalp_train0001" in names
+    # test/val records are unlabelled, train records labelled
+    assert not ds.example_markers("morpho_test01")
+    assert ds.expert_baseline("morpho_train01") is not None
 
 
 def test_morpho_has_expert_baseline_and_zones():
@@ -24,7 +36,7 @@ def test_morpho_has_expert_baseline_and_zones():
 
 
 def test_falsesig_has_urs_and_protected_expulsion():
-    name = "fs_dopmhr_01"
+    name = "fs_dopmhr_train0006"
     marks = ds.example_markers(name)
     assert any(m[1].startswith("$ URS") for m in marks), "no false-signal zones"
     # the expulsion mark is protected (the £ prefix marks a non-editable mark)
@@ -43,7 +55,7 @@ def test_load_example_builds_viewer(source):
 def test_timestamp_is_zeroed():
     from fhrpy.io import read_fhr
 
-    rec = read_fhr(ds.example_path("fs_dopmhr_01"))
+    rec = read_fhr(ds.example_path("fs_dopmhr_train0006"))
     assert int(rec.timestamp) == 0
 
 
