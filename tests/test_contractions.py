@@ -90,3 +90,16 @@ def test_compute_features_standard_keys():
         assert k in feats
     assert feats["dec_count"] == len(__import__("fhrpy.baseline", fromlist=["analyze"]).analyze(rec)["decelerations"])
     assert feats["contraction_count"] >= 0
+
+
+def test_signal_loss_percent_nonzero_on_gappy_record():
+    # regression: signal_loss_percent must reflect real loss (preprocessed FHR
+    # marks gaps with NaN, not 0).
+    import numpy as np
+    from fhrpy.baseline import analyze, compute_features
+    rec = read_fhr(ds.example_path("ctg_example_01"))
+    ma = analyze(rec)
+    ref = 100.0 * float(np.mean(np.isnan(np.asarray(ma["fhr"])[ma["d"]:ma["f"] + 1])))
+    got = compute_features(rec)["signal_loss_percent"]
+    assert ref > 5.0                      # this record genuinely has loss
+    assert abs(got - ref) < 1e-6

@@ -105,11 +105,14 @@ def compute_features(source, start_s: float | None = None, end_s: float | None =
     r: dict = {}
     # --- A. basic -----------------------------------------------------------
     r["analysis_duration_min"] = win / 240.0
-    raw = np.asarray(getattr(source, "fhr1", None) if not isinstance(source, dict) else ma.get("fhr"))
-    r["signal_loss_percent"] = (
-        _pct((np.asarray(ma["fhr"])[sl] == 0) if ma.get("fhr") is not None else (raw[sl] == 0), win)
-        if (ma.get("fhr") is not None or raw is not None) else float("nan")
-    )
+    # signal loss = % of the window where the FHR is missing. The preprocessed
+    # ``fhr`` marks gaps with NaN (amnio: FHR(FHR==0)=NaN; perte = %NaN).
+    fhr_gap = ma.get("fhr")
+    if fhr_gap is not None:
+        r["signal_loss_percent"] = _pct(np.isnan(np.asarray(fhr_gap)[sl]), win)
+    else:
+        raw = np.asarray(getattr(source, "fhr1", []), dtype=float)
+        r["signal_loss_percent"] = _pct(raw[sl] == 0, win) if raw.size else float("nan")
     r["fhr_mean"] = _safe_mean(fhr_w)
     r["fhr_total_delta"] = float(np.quantile(fhr_w, 0.98) - np.quantile(fhr_w, 0.02)) if win else float("nan")
 
