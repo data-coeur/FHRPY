@@ -4,8 +4,8 @@ The pure-NumPy :mod:`fhrpy.falsesignal.model` runs the bidirectional stacked
 GRUs with an explicit Python time loop. This module maps the very same trained
 weights into ``torch.nn.GRU`` (whose cuDNN kernel runs the recurrence on the
 GPU) and reproduces the identical bidirectional plumbing in torch, so the output
-matches the NumPy reference to float round-off (~1e-14) while batching many
-recordings on the GPU for throughput.
+matches the NumPy reference exactly in float64 (CPU, ~1e-14) and closely in
+the default float32 GPU path (~1e-3), while running the recurrence on the GPU.
 
 Key weight mapping — Keras ``GRU(reset_after=True)`` (gate order ``z|r|h``) maps
 onto ``torch.nn.GRU`` (which is *already* reset-after, gate order ``r|z|n``):
@@ -56,7 +56,7 @@ class _DenseT:
 class FSDopTorch(nn.Module):
     """GPU port of :class:`fhrpy.falsesignal.model.FSDopModel`."""
 
-    def __init__(self, model=None, device=None, dtype=torch.float64):
+    def __init__(self, model=None, device=None, dtype=torch.float32):
         super().__init__()
         model = model or load_model("doppler")
         self.device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
@@ -71,19 +71,19 @@ class FSDopTorch(nn.Module):
     @torch.no_grad()
     def forward(self, I):
         """``I``: (T, 5) array/tensor. Returns ``(PDop, PMat)`` numpy arrays."""
-        I = torch.as_tensor(np.asarray(I), device=self.device, dtype=self.dtype)
+        I = torch.as_tensor(np.ascontiguousarray(np.asarray(I)), device=self.device, dtype=self.dtype)
         RevI = torch.flip(I, [0])
-        G1M, _ = self.g1m(torch.stack([I, RevI], 1))                      # (T,2,12)
+        G1M, _ = self.g1m(torch.stack([I, RevI], 1).contiguous())         # (T,2,12)
         PMat = self.densePmat(torch.cat([G1M[:, 0], torch.flip(G1M[:, 1], [0])], 1))[:, 0]
         RPMat = torch.flip(PMat, [0])
         L0 = torch.stack([torch.cat([PMat[:, None], I], 1),
-                          torch.cat([RPMat[:, None], RevI], 1)], 1)       # (T,2,6)
+                          torch.cat([RPMat[:, None], RevI], 1)], 1).contiguous()  # (T,2,6)
         G1, _ = self.g1(L0)
 
         def bidir(G):
             f = torch.cat([G[:, 0], torch.flip(G[:, 1], [0]), PMat[:, None], I], 1)
             r = torch.cat([torch.flip(G[:, 0], [0]), G[:, 1], RPMat[:, None], RevI], 1)
-            return torch.stack([f, r], 1)
+            return torch.stack([f, r], 1).contiguous()
 
         G2, _ = self.g2(bidir(G1))
         G3, _ = self.g3(bidir(G2))
@@ -101,7 +101,7 @@ class FSDopTorch(nn.Module):
 class FSScalpTorch(nn.Module):
     """GPU port of :class:`fhrpy.falsesignal.model.FSScalpModel`."""
 
-    def __init__(self, model=None, device=None, dtype=torch.float64):
+    def __init__(self, model=None, device=None, dtype=torch.float32):
         super().__init__()
         model = model or load_model("scalp")
         self.device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
@@ -113,15 +113,15 @@ class FSScalpTorch(nn.Module):
 
     @torch.no_grad()
     def forward(self, I):
-        I = torch.as_tensor(np.asarray(I), device=self.device, dtype=self.dtype)
+        I = torch.as_tensor(np.ascontiguousarray(np.asarray(I)), device=self.device, dtype=self.dtype)
         RevI = torch.flip(I, [0])
 
         def bidir_in(G):
             f = torch.cat([G[:, 0], torch.flip(G[:, 1], [0]), I], 1)
             r = torch.cat([torch.flip(G[:, 0], [0]), G[:, 1], RevI], 1)
-            return torch.stack([f, r], 1)
+            return torch.stack([f, r], 1).contiguous()
 
-        G1, _ = self.g1(torch.stack([I, RevI], 1))
+        G1, _ = self.g1(torch.stack([I, RevI], 1).contiguous())
         G2, _ = self.g2(bidir_in(G1))
         G3, _ = self.g3(bidir_in(G2))
         CDop = torch.cat([G3[:, 0], torch.flip(G3[:, 1], [0])], 1)
