@@ -307,6 +307,7 @@ class GraphPlot {
     this.markRects = [];
     this.measurer = {};
     this.newMark = {};
+    this.box1515 = {};   // reference cursor: crosshair + 30 bpm x 15 s rectangle
 
     this.eventTextEdit.addEventListener('keyup', () => {
       this.eventTextEdit.style.height = '0px';
@@ -738,7 +739,27 @@ class GraphPlot {
     this.svg.appendChild(t); return t;
   }
 
+  _svgAttr(el, attrs) { for (const k in attrs) el.setAttributeNS(null, k, attrs[k]); }
+
+  /* --- reference cursor: crosshair + 30 bpm x 15 s box (ported from v2) ---- */
+  initializeBox1515() {
+    this.clearBox1515();
+    this.box1515.hline = this._svgLine(this.BorderLeft, -100, this.graphWidth + this.BorderLeft, -100, '#555');
+    this.box1515.vline = this._svgLine(-100, this.BorderTop, -100, this.BorderTop + this.graphHeight, '#555');
+    const r = document.createElementNS(SVGNS, 'rect');
+    r.setAttributeNS(null, 'fill', 'none');
+    r.setAttributeNS(null, 'stroke', '#555');
+    this.svg.appendChild(r);
+    this.box1515.rect = r;
+  }
+
+  clearBox1515() {
+    this._svgRemove(this.box1515.hline, this.box1515.vline, this.box1515.rect);
+    this.box1515 = {};
+  }
+
   initializeMeasurer() {
+    this.clearBox1515();
     this.measurer.hline = this._svgLine(this.BorderLeft, -100, this.graphWidth + this.BorderLeft, -100, 'black');
     this.measurer.textY = this._svgText(this.BorderLeft + 5, undefined);
     this.measurer.vline = this._svgLine(-100, this.BorderTop, -100, this.BorderTop + this.graphHeight, 'black');
@@ -755,6 +776,7 @@ class GraphPlot {
   }
 
   initializeNewMark(defaultText) {
+    this.clearBox1515();
     const color = (defaultText === 'Question' || (defaultText.length > 0 && defaultText[0] === '£')) ? '#0000FF' : '#FFBB00';
     this.newMark.textEvent = this._svgText(0, this.BorderTop + 17);
     this.newMark.textEvent.setAttributeNS(null, 'fill', color);
@@ -866,6 +888,21 @@ class GraphPlot {
       this.newMark.vline.setAttributeNS(null, 'x1', mousex);
       this.newMark.vline.setAttributeNS(null, 'x2', mousex);
       this.newMark.textEvent.setAttributeNS(null, 'x', mousex + 5);
+    } else {
+      // 'None' (default): reference cursor = crosshair + a 30 bpm x 15 s box
+      // anchored at the pointer, to gauge amplitude/variability at a glance.
+      if (!this.box1515.rect) this.initializeBox1515();
+      const size15 = (this.RCFHeight * 15) / (this.signals.maxRCF - this.signals.minRCF);
+      this._svgAttr(this.box1515.hline, {
+        x1: this.BorderLeft, y1: mousey, x2: this.graphWidth + this.BorderLeft, y2: mousey,
+      });
+      this._svgAttr(this.box1515.vline, {
+        x1: mousex, y1: this.BorderTop, x2: mousex, y2: this.BorderTop + this.graphHeight,
+      });
+      this._svgAttr(this.box1515.rect, {
+        x: mousex, y: mousey - size15, height: 2 * size15,
+        width: (15 / this.winlength) * this.graphWidth,
+      });
     }
   }
 
