@@ -30,10 +30,22 @@
   position: relative;
   min-width: 100px;
   min-height: 80px;
-  height: calc(100% - 84px);
+  height: calc(100% - 94px);
   cursor: pointer;
   overflow: hidden;
   background: #fff;
+}
+
+/* bottom drag handle to resize the viewer height */
+.fhr-viewer .resizebar {
+  width: 100%;
+  height: 10px;
+  background: repeating-linear-gradient(90deg, #ddd 0 6px, #ededed 6px 12px);
+  border-top: 1px solid #ccc;
+  cursor: row-resize;
+}
+.fhr-viewer .resizebar:hover {
+  background: #cde6ff;
 }
 
 .fhr-viewer .graph .background-canvas,
@@ -447,6 +459,7 @@ class GraphPlot {
     this.displayMorpho = true;        // baseline + accel/decel zones toggle
     this.displayContractions = true;  // contraction (TOCO) zones toggle
     this.displayFalseSignals = true;  // false-signal (URS/NTA) zones toggle
+    this.displayMarks = true;         // text markers (events / decel types) toggle
     // The false-signal mask applies ONLY to the analysed fetal channel (the
     // Doppler FHR1 for kind='doppler', the scalp FHR2 for kind='scalp'); the
     // maternal MHR reference is never a "false fetal signal".
@@ -833,6 +846,7 @@ class GraphPlot {
   drawMarks() {
     const s = this.signals;
     this.markRects = [];
+    if (!this.displayMarks) return;   // marker show/hide toggle
     const all = [{ x: this.graphWidth - 200, y: this.BorderTop, w: 200, h: 21 }];
     this.ctx.font = '16px Arial';
     this.ctx.textAlign = 'left';
@@ -1099,10 +1113,16 @@ const ICONS = {
   // Contraction (TOCO) bell.
   contractions: '<svg viewBox="0 0 24 24" aria-hidden="true">'
     + '<path d="M3 20 C8 20 9 6.5 12 6.5 C15 6.5 16 20 21 20 Z" fill="#9a8400" fill-opacity="0.35" stroke="#7a6a00" stroke-width="1.3"/></svg>',
-  // False signals: two crossing HR traces (FHR vs maternal), light tones.
-  falsesignals: '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke-width="1.7">'
-    + '<path d="M2 9 q3 -5 6 0 t6 0 t6 0" stroke="#ff6fa3"/>'
-    + '<path d="M2 15 q3 5 6 0 t6 0 t6 0" stroke="#6fa8ff"/></svg>',
+  // False signals: a fetal (pink) and a maternal (blue) trace crossing, with a
+  // red dot at the confusion point — explicit "FHR<->MHR mix-up" glyph.
+  falsesignals: '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke-width="2.2" stroke-linecap="round">'
+    + '<path d="M3 6 L21 18" stroke="#ff4d97"/>'
+    + '<path d="M3 18 L21 6" stroke="#4d86ff"/>'
+    + '<circle cx="12" cy="12" r="2.4" fill="#e00000" stroke="none"/></svg>',
+  // Event/text markers: a flag on a marker line.
+  markers: '<svg viewBox="0 0 24 24" aria-hidden="true">'
+    + '<path d="M6 3 V21" fill="none" stroke="#888" stroke-width="1.5"/>'
+    + '<path d="M6 4 H17 l-2.6 3 2.6 3 H6 Z" fill="#FFBB00" stroke="#c99500" stroke-width="1"/></svg>',
   // Interpolate: solid–dashed–solid bridge across a gap.
   interpolate: '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8">'
     + '<path d="M2 17 L8 9"/><path d="M8 9 H16" stroke-dasharray="2.2 2.2"/><path d="M16 9 L22 17"/></svg>',
@@ -1121,7 +1141,8 @@ const BUTTONS = [
   ['scale', '3cm<br>/min', 'Toggle paper speed: 1 / 3 cm per minute', false],
   ['baseline', 'baseline', 'Show / hide the baseline + acceleration / deceleration zones', true],
   ['contractions', 'contractions', 'Show / hide detected contraction (TOCO) zones', true],
-  ['falsesignals', 'falsesignals', 'Show / hide false-signal (maternal / artefact) zones', true],
+  ['falsesignals', 'falsesignals', 'Show / hide false signals (FHR/MHR confusion, lighter samples)', true],
+  ['markers', 'markers', 'Show / hide the text markers (events, deceleration types)', true],
   ['mhr', 'MHR', 'Show / hide the maternal heart rate (MHR)', false],
   ['interpolate', 'interpolate', 'Interpolate missing points (bridge gaps)', true],
   ['print', 'print', 'Print to PDF (A4 landscape, ~1 cm/min, multi-page)', true],
@@ -1216,7 +1237,12 @@ class FHRViewer {
     }
     controllers.append(this.scrollEl, icons);
 
-    this.host.append(this.graphEl, controllers);
+    // bottom drag handle to resize the viewer height (re-added; syncs the iframe)
+    this.resizebar = document.createElement('div');
+    this.resizebar.className = 'resizebar';
+    this.resizebar.title = 'Drag to resize the viewer height';
+
+    this.host.append(this.graphEl, controllers, this.resizebar);
 
     // reflect initial toggle states
     if (this.opts.zones !== false) this._btn.baseline.classList.add('active');
@@ -1224,6 +1250,7 @@ class FHRViewer {
     if (this.opts.falseSignals !== false) this._btn.falsesignals.classList.add('active');
     if (this.opts.scale === 3) this._btn.scale.classList.add('active');
     if (this.opts.interpolate) this._btn.interpolate.classList.add('active');
+    this._btn.markers.classList.add('active');
     this._btn.mhr.classList.add('active');
   }
 
@@ -1236,9 +1263,13 @@ class FHRViewer {
     this._btn.baseline.addEventListener('click', () => { this.setZonesVisible(!this.graph.displayMorpho); this._emit('button:baseline', { on: this.graph.displayMorpho }); });
     this._btn.contractions.addEventListener('click', () => { this.setContractionsVisible(!this.graph.displayContractions); this._emit('button:contractions', { on: this.graph.displayContractions }); });
     this._btn.falsesignals.addEventListener('click', () => { this.setFalseSignalsVisible(!this.graph.displayFalseSignals); this._emit('button:falsesignals', { on: this.graph.displayFalseSignals }); });
+    this._btn.markers.addEventListener('click', () => { this.setMarksVisible(!this.graph.displayMarks); this._emit('button:markers', { on: this.graph.displayMarks }); });
     this._btn.mhr.addEventListener('click', () => { this.setChannelVisible('MHR', this.channelVisible.MHR === false); this._emit('button:mhr', { on: this.channelVisible.MHR }); });
     this._btn.interpolate.addEventListener('click', () => { this.setInterpolate(!this.graph.interpolate); this._emit('button:interpolate', { on: this.graph.interpolate }); });
     this._btn.print.addEventListener('click', () => { this.print(); this._emit('button:print', {}); });
+
+    // bottom resize handle
+    this.resizebar.addEventListener('mousedown', (e) => this._resizeDown(e));
 
     // graph drag-to-pan + click (measure / new mark / edit)
     this._panState = null;
@@ -1374,6 +1405,21 @@ class FHRViewer {
     this._panVel = 0;
   }
 
+  /* --- bottom resize handle: drag to change the viewer height -------------- */
+  _resizeDown(e) {
+    e.preventDefault();
+    const startH = this.host.clientHeight;
+    const startY = e.clientY;
+    const move = (ev) => this.setHeight(startH + (ev.clientY - startY));
+    const up = () => {
+      document.removeEventListener('mousemove', move);
+      document.removeEventListener('mouseup', up);
+      this._emit('heightChange', { height: this.host.clientHeight });
+    };
+    document.addEventListener('mousemove', move);
+    document.addEventListener('mouseup', up);
+  }
+
   _graphPan(e) {
     const g = this.graph, s = g.signals;
     const secPerPx = g.winlength / Math.max(g.graphWidth, 1);
@@ -1433,12 +1479,27 @@ class FHRViewer {
     }
     this.graph.redraw();
     this._updateScrollBar();
+    this._updateButtonVisibility();
     return this;
   }
 
-  loadMarkers(text) { this.graph.signals.loadMarkers(text); this.graph.redraw(); this._markersChanged(); return this; }
+  loadMarkers(text) { this.graph.signals.loadMarkers(text); this.graph.redraw(); this._updateButtonVisibility(); this._markersChanged(); return this; }
 
-  setMarkers(list) { this.graph.signals.setMarks(list); this.graph.redraw(); this._markersChanged(); return this; }
+  setMarkers(list) { this.graph.signals.setMarks(list); this.graph.redraw(); this._updateButtonVisibility(); this._markersChanged(); return this; }
+
+  /** Hide the toggle buttons whose data is absent (e.g. no contraction zones). */
+  _updateButtonVisibility() {
+    const s = this.graph.signals;
+    const marks = s.Marks || [];
+    const hasType = (t) => marks.some((m) => m && m[1] && m[1][0] === '$' && m[1].substring(2, 5) === t);
+    const hasText = marks.some((m) => m && m[1] && m[1][0] !== '$');
+    const hasBaseline = (s.baselineRCF && s.baselineRCF.length > 0) || hasType('ACC') || hasType('DEC');
+    const show = (name, on) => { if (this._btn[name]) this._btn[name].style.display = on ? '' : 'none'; };
+    show('baseline', hasBaseline);
+    show('contractions', hasType('CON'));
+    show('falsesignals', hasType('URS') || hasType('NTA'));
+    show('markers', hasText);
+  }
 
   getMarkers() { return this.graph.signals.getMarks(); }
 
@@ -1476,7 +1537,7 @@ class FHRViewer {
     const src = this.graph, s = src.signals;
     if (s.start < 0) return this;
     const pxPerCm = 37.8 * 2;                       // 2x oversampling for crisp print
-    const Wcm = opts.pageWidthCm || 26;             // ≈ 1 cm/min -> ≈ 26 min/page
+    const Wcm = opts.pageWidthCm || 27;             // fill the A4-landscape width (~1 cm/min)
     const Hcm = opts.pageHeightCm || 12.63;         // graph area -> 20 bpm/cm
     const overlapSec = (opts.overlapMin != null ? opts.overlapMin : 2) * 60;
 
@@ -1555,6 +1616,7 @@ class FHRViewer {
     for (let i = 0; i < n; i++) pageNums.push(5 + 3 * i);
     obj(2, `<< /Type /Pages /Count ${n} /Kids [${pageNums.map((p) => `${p} 0 R`).join(' ')}] >>`);
     const ty = (H - imgHpt - 20).toFixed(2);         // 20 pt top margin
+    const tx = (Math.max(0, (W - imgWpt) / 2)).toFixed(2);   // centre the strip in X
     for (let i = 0; i < n; i++) {
       const img = 3 + 3 * i, content = 4 + 3 * i, page = 5 + 3 * i;
       obj(img, {
@@ -1562,7 +1624,7 @@ class FHRViewer {
           + `/ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${jpegs[i].length} >>`,
         stream: jpegs[i],
       });
-      const cs = `q ${imgWpt.toFixed(2)} 0 0 ${imgHpt.toFixed(2)} 20 ${ty} cm /Im Do Q`;
+      const cs = `q ${imgWpt.toFixed(2)} 0 0 ${imgHpt.toFixed(2)} ${tx} ${ty} cm /Im Do Q`;
       obj(content, { dict: `<< /Length ${cs.length} >>`, stream: enc(cs) });
       obj(page, `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${W} ${H}] `
         + `/Resources << /XObject << /Im ${img} 0 R >> >> /Contents ${content} 0 R >>`);
@@ -1655,6 +1717,14 @@ class FHRViewer {
     this._btn.falsesignals.classList.toggle('active', !!on);
     this.graph.redraw();
     this._emit('falseSignalsChange', { on: !!on });
+    return this;
+  }
+
+  setMarksVisible(on) {
+    this.graph.displayMarks = !!on;
+    this._btn.markers.classList.toggle('active', !!on);
+    this.graph.redraw();
+    this._emit('marksChange', { on: !!on });
     return this;
   }
 
