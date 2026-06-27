@@ -1164,14 +1164,12 @@ export class FHRViewer {
     const prev = g.mouseMode;
     if (g.mouseMode !== 'None') {
       g.removeMouseMode();
-      for (const n of ['measure', 'addevent', 'addquestion']) this._btn[n].classList.remove('active');
+      for (const n of ['measure', 'addevent']) this._btn[n].classList.remove('active');
     }
     if (kind === 'measure' && prev !== 'Measurer1' && prev !== 'Measurer2') {
       g.initializeMeasurer(); this._btn.measure.classList.add('active');
     } else if (kind === 'event' && prev !== 'NewMarkPostioning') {
       g.initializeNewMark(''); this._btn.addevent.classList.add('active');
-    } else if (kind === 'question' && prev !== 'NewMarkPostioning') {
-      g.initializeNewMark('Question'); this._btn.addquestion.classList.add('active');
     }
   }
 
@@ -1180,7 +1178,7 @@ export class FHRViewer {
     if (g.mouseMode === 'Measurer1') { g.initializeMeasurer2(); return; }
     if (g.mouseMode === 'Measurer2') { g.removeMouseMode(); g.initializeMeasurer(); return; }
     if (g.mouseMode === 'NewMarkPostioning') {
-      for (const n of ['addevent', 'addquestion']) this._btn[n].classList.remove('active');
+      this._btn.addevent.classList.remove('active');
       if (e.which >= 2) { g.removeMouseMode(); e.preventDefault(); return; }
       g.newMarkEdit(e.shiftKey);
       return;

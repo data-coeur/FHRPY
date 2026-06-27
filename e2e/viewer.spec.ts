@@ -87,3 +87,31 @@ test('CTG viewer renders grid + curve and reacts to toggles', async ({ page }) =
   const t2 = await page.evaluate(() => (window as any).fhrViewer.graph.time);
   expect(Number.isFinite(t2)).toBe(true);
 });
+
+test('can add an event marker by clicking the trace (edit box opens)', async ({ page }) => {
+  await page.goto(fileUrl);
+  await page.waitForSelector('#fhr-host[data-ready="1"]', { timeout: 30000 });
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(String(e)));
+
+  const n0 = await page.evaluate(() => (window as any).fhrViewer.getMarkers().length);
+  await page.click('.btn-addevent');
+  const box = await page.evaluate(() => {
+    const g = document.querySelector('.fhr-viewer .graph') as HTMLElement;
+    const r = g.getBoundingClientRect();
+    return { x: r.x, y: r.y, w: r.width, h: r.height };
+  });
+  await page.mouse.click(box.x + box.w * 0.4, box.y + box.h * 0.4);
+  // the edit textarea must become visible (regression: a stale addquestion ref threw here)
+  const editVisible = await page.evaluate(() => {
+    const t = document.querySelector('.eventTextEdit') as HTMLElement;
+    return !!t && getComputedStyle(t).display !== 'none';
+  });
+  expect(editVisible).toBe(true);
+  await page.evaluate(() => { (document.querySelector('.eventTextEdit') as HTMLTextAreaElement).value = 'e2e mark'; });
+  await page.mouse.click(box.x + box.w * 0.85, box.y + box.h * 0.85);  // validate
+  const marks = await page.evaluate(() => (window as any).fhrViewer.getMarkers());
+  expect(marks.length).toBe(n0 + 1);
+  expect(marks.some((m: any[]) => String(m[1]).includes('e2e mark'))).toBe(true);
+  expect(errors).toEqual([]);
+});
