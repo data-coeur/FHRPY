@@ -36,3 +36,13 @@ def test_fsdop_gpu_float32_close():
     ref = load_model("doppler")(build_dop_features(rec.fhr1, rec.mhr))[0]
     got = FSDopTorch().detect(rec.fhr1, rec.mhr)   # default float32 on GPU
     assert np.max(np.abs(ref - got)) < 5e-3
+
+
+def test_fstf_matches_numpy_if_available():
+    tf = pytest.importorskip("tensorflow", reason="TF backend test needs TensorFlow")
+    from fhrpy.falsesignal.tf_backend import FSDopTF
+
+    rec = read_fhr(ds.example_path("fs_dopmhr_01"))
+    ref = load_model("doppler")(build_dop_features(rec.fhr1, rec.mhr))[0]
+    got = FSDopTF().detect(rec.fhr1, rec.mhr)
+    assert np.max(np.abs(ref - got)) < 5e-3
