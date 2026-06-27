@@ -115,3 +115,25 @@ test('can add an event marker by clicking the trace (edit box opens)', async ({ 
   expect(marks.some((m: any[]) => String(m[1]).includes('e2e mark'))).toBe(true);
   expect(errors).toEqual([]);
 });
+
+test('print button produces a multi-page A4 PDF blob (works without window.open)', async ({ page }) => {
+  await page.goto(fileUrl);
+  await page.waitForSelector('#fhr-host[data-ready="1"]', { timeout: 30000 });
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(String(e)));
+  const res = await page.evaluate(async () => {
+    let captured: Blob | null = null;
+    const real = URL.createObjectURL.bind(URL);
+    URL.createObjectURL = (b: Blob) => { captured = b; return real(b); };
+    (window as any).fhrViewer.print();
+    if (!captured) return { ok: false };
+    const bytes = new Uint8Array(await (captured as Blob).arrayBuffer());
+    const head = String.fromCharCode(...bytes.slice(0, 5));
+    return { ok: true, type: (captured as Blob).type, size: bytes.length, head };
+  });
+  expect(res.ok).toBe(true);
+  expect(res.type).toBe('application/pdf');
+  expect(res.head).toBe('%PDF-');
+  expect(res.size).toBeGreaterThan(1000);
+  expect(errors).toEqual([]);
+});

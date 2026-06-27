@@ -535,7 +535,11 @@ class FHRViewer:
         return self._post("setSafeZone", float(min_bpm), float(max_bpm))
 
     def print(self):
-        """Open the printable, multi-page A4-landscape layout (Save as PDF)."""
+        """Download a multi-page A4-landscape PDF of the whole recording.
+
+        Works in a notebook (the PDF is assembled in-page and saved via a Blob
+        download), where a print-dialog pop-up would be blocked.
+        """
         return self._post("print")
 
     # ------------------------------------------------------------------ #

@@ -1465,11 +1465,12 @@ class FHRViewer {
   }
 
   /**
-   * Open a printable, multi-page A4-landscape layout and trigger the print
-   * dialog (the user can "Save as PDF"). Geometry: 1 cm/min horizontally and
-   * 20 bpm/cm vertically (a 12.63 cm graph area gives exactly 20 bpm/cm for the
-   * default 50–210 range); consecutive pages overlap by ~2 min so nothing falls
-   * on a page seam. Inspired by the legacy fileprint.php but fully client-side.
+   * Build a multi-page A4-landscape **PDF** of the whole recording and download
+   * it. Geometry: 1 cm/min horizontally and 20 bpm/cm vertically (a 12.63 cm
+   * graph area gives 20 bpm/cm for the default 50–210 range); consecutive pages
+   * overlap by ~2 min so nothing falls on a seam. The PDF is assembled in-page
+   * (one JPEG strip per page) and saved via a Blob download, so it works even
+   * inside a notebook iframe where window.open()/print() is blocked.
    */
   print(opts = {}) {
     const src = this.graph, s = src.signals;
@@ -1503,28 +1504,77 @@ class FHRViewer {
     const totalSec = s.lastTime - s.start;
     const nPages = Math.max(1, Math.ceil((totalSec - overlapSec) / step));
 
-    const imgs = [];
+    const PT = 28.3465;                              // points per cm
+    const W = 842, H = 595;                          // A4 landscape (points)
+    const imgWpt = Wcm * PT, imgHpt = Hcm * PT;      // place the strip at its real cm size
+    const jpegs = [];
+    let imgW = 0, imgH = 0;
     for (let i = 0; i < nPages; i++) {
       gp.time = Math.min(s.start + i * step, Math.max(s.start, s.lastTime - winSec));
       gp.redraw();
-      imgs.push(gp.canvas.toDataURL('image/png'));
+      imgW = gp.canvas.width; imgH = gp.canvas.height;
+      const b64 = gp.canvas.toDataURL('image/jpeg', 0.85).split(',')[1];
+      const bin = atob(b64), u = new Uint8Array(bin.length);
+      for (let k = 0; k < bin.length; k++) u[k] = bin.charCodeAt(k);
+      jpegs.push(u);
     }
     document.body.removeChild(box);
 
-    const pages = imgs.map((d) => `<div class="page"><img src="${d}"/></div>`).join('');
-    const w = window.open('', '_blank');
-    if (!w) return this;                            // pop-up blocked
-    w.document.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>FHR print</title>'
-      + '<style>@page{size:A4 landscape;margin:0.7cm;}'
-      + 'html,body{margin:0;padding:0;background:#fff;}'
-      + `.page{width:${Wcm}cm;height:${Hcm}cm;page-break-after:always;}`
-      + '.page:last-child{page-break-after:auto;}'
-      + '.page img{width:100%;height:100%;display:block;}'
-      + `</style></head><body>${pages}</body></html>`);
-    w.document.close();
-    w.focus();
-    setTimeout(() => { try { w.print(); } catch (e) { /* noop */ } }, 350);
+    const pdf = this._buildPdf(jpegs, imgW, imgH, W, H, imgWpt, imgHpt);
+    const url = URL.createObjectURL(new Blob([pdf], { type: 'application/pdf' }));
+    const a = document.createElement('a');
+    a.href = url; a.download = `${opts.filename || 'ctg'}.pdf`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
     return this;
+  }
+
+  /** Assemble a minimal multi-page PDF, one full-strip DCTDecode (JPEG) per page. */
+  _buildPdf(jpegs, imgW, imgH, W, H, imgWpt, imgHpt) {
+    const parts = [];
+    let length = 0;
+    const enc = (str) => {
+      const a = new Uint8Array(str.length);
+      for (let i = 0; i < str.length; i++) a[i] = str.charCodeAt(i) & 0xff;
+      return a;
+    };
+    const add = (d) => { const u = d instanceof Uint8Array ? d : enc(d); parts.push(u); length += u.length; };
+    const off = {};
+    const obj = (num, body) => {
+      off[num] = length;
+      add(`${num} 0 obj\n`);
+      if (typeof body === 'string') add(`${body}\n`);
+      else { add(`${body.dict}\nstream\n`); add(body.stream); add('\nendstream\n'); }
+      add('endobj\n');
+    };
+    const n = jpegs.length;
+    const total = 2 + 3 * n;
+    add('%PDF-1.4\n%\xE2\xE3\xCF\xD3\n');
+    obj(1, '<< /Type /Catalog /Pages 2 0 R >>');
+    const pageNums = [];
+    for (let i = 0; i < n; i++) pageNums.push(5 + 3 * i);
+    obj(2, `<< /Type /Pages /Count ${n} /Kids [${pageNums.map((p) => `${p} 0 R`).join(' ')}] >>`);
+    const ty = (H - imgHpt - 20).toFixed(2);         // 20 pt top margin
+    for (let i = 0; i < n; i++) {
+      const img = 3 + 3 * i, content = 4 + 3 * i, page = 5 + 3 * i;
+      obj(img, {
+        dict: `<< /Type /XObject /Subtype /Image /Width ${imgW} /Height ${imgH} `
+          + `/ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${jpegs[i].length} >>`,
+        stream: jpegs[i],
+      });
+      const cs = `q ${imgWpt.toFixed(2)} 0 0 ${imgHpt.toFixed(2)} 20 ${ty} cm /Im Do Q`;
+      obj(content, { dict: `<< /Length ${cs.length} >>`, stream: enc(cs) });
+      obj(page, `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${W} ${H}] `
+        + `/Resources << /XObject << /Im ${img} 0 R >> >> /Contents ${content} 0 R >>`);
+    }
+    const xref = length;
+    add(`xref\n0 ${total + 1}\n0000000000 65535 f \n`);
+    for (let num = 1; num <= total; num++) add(`${String(off[num] || 0).padStart(10, '0')} 00000 n \n`);
+    add(`trailer\n<< /Size ${total + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`);
+    const out = new Uint8Array(length);
+    let p = 0;
+    for (const u of parts) { out.set(u, p); p += u.length; }
+    return out;
   }
 
   /** Scroll to an epoch (>= 100000) or a fraction (0..1). */
