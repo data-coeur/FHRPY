@@ -32,7 +32,6 @@ def _analyze_bytes(data: bytes, ext: str, with_fs: bool) -> dict:
     import numpy as np
 
     from fhrpy.baseline import analyze
-    from fhrpy.falsesignal import detect_false_signals
     from fhrpy.io import read_fhr
 
     with tempfile.NamedTemporaryFile(suffix="." + ext.lstrip("."), delete=False) as fh:
@@ -40,7 +39,9 @@ def _analyze_bytes(data: bytes, ext: str, with_fs: bool) -> dict:
         tmp = fh.name
     try:
         rec = read_fhr(tmp)
-        res = analyze(rec)
+        # FHRMA order: when false signals are requested they are detected & removed
+        # BEFORE the WMFB baseline (analyze does this internally).
+        res = analyze(rec, false_signals=("doppler" if with_fs else None))
         baseline = np.asarray(res["baseline"], float)
         # Decimate the baseline to ~1 Hz for a compact response.
         step = max(1, int(round(rec.fs)))
@@ -52,9 +53,9 @@ def _analyze_bytes(data: bytes, ext: str, with_fs: bool) -> dict:
             "accelerations": [[round(a, 1), round(b, 1)] for a, b in res["accelerations"]],
             "decelerations": [[round(a, 1), round(b, 1)] for a, b in res["decelerations"]],
         }
-        if with_fs:
-            fs = detect_false_signals(rec, kind="doppler")
-            out["false_signals"] = [[round(a, 1), round(b, 1)] for a, b in fs["segments"]]
+        if with_fs and res.get("false_signals"):
+            out["false_signals"] = [[round(a, 1), round(b, 1)]
+                                    for a, b in res["false_signals"]["segments"]]
         return out
     finally:
         os.unlink(tmp)

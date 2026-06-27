@@ -634,17 +634,61 @@ def classify_decelerations(decelerations, fhri, baseline, contractions=None, fs:
     return out
 
 
-def analyze(record, unreliable_signal=None, return_result: bool = False):
+def analyze(record, unreliable_signal=None, return_result: bool = False,
+            false_signals=None, false_signals_kind: str = "doppler",
+            stage2_start: int | None = None):
     """Preprocess then run WMFB on a loaded :class:`fhrpy.io.FHRRecord`.
+
+    **Pipeline order (FHRMA).** When ``false_signals`` is truthy (``True`` or a
+    detector kind such as ``"doppler"`` / ``"scalp"``), the FHRMA order is
+    enforced: false signals are **detected and removed FIRST**, then the WMFB
+    baseline is computed on the *cleaned* signal. Running the baseline on an
+    un-cleaned Doppler trace would let maternal/artefact samples distort it —
+    so for Doppler recordings always pass ``false_signals="doppler"``. The
+    detector result is returned under the ``"false_signals"`` key.
 
     Returns a dict with ``baseline``, ``fhri``, ``accelerations``,
     ``decelerations``, ``false_acc``, ``false_dec``, ``contractions`` (uterine
-    contractions detected from TOCO, see :func:`detect_contractions`), and
-    ``d``/``f`` (first/last valid sample). Accel/decel/contractions are lists of
-    ``(start_s, end_s)``.
+    contractions detected from TOCO, see :func:`detect_contractions`),
+    ``deceleration_types``, ``false_signals``, and ``d``/``f`` (first/last valid
+    sample). Accel/decel/contractions are lists of ``(start_s, end_s)``.
     """
+    import numpy as np
+
     from ..preprocess.preprocess import preprocess
 
+    fs_result = None
+    if false_signals:
+        # 1) false-signal detection & removal — BEFORE the baseline (FHRMA order).
+        import copy as _copy
+
+        from ..falsesignal import detect_false_signals
+
+        kind = false_signals if isinstance(false_signals, str) else false_signals_kind
+        record = _copy.copy(record)
+        record.fhr1 = np.asarray(record.fhr1, dtype=float).copy()
+        record.fhr2 = np.asarray(record.fhr2, dtype=float).copy()
+
+        def _clean(chan, det_kind):
+            res = detect_false_signals(record, kind=det_kind, stage2_start=stage2_start)
+            m = np.asarray(res["mask"], dtype=bool)
+            sig = getattr(record, chan)
+            k = min(len(m), len(sig))
+            sig[:k][m[:k]] = 0  # 0 = lost -> gap; preprocess max() then uses the other channel
+            return res
+
+        # Clean the requested channel. The baseline is computed on max(FHR1,FHR2),
+        # so zeroing ONLY the Doppler (fhr1) lets the SCALP (fhr2) carry the
+        # baseline where the Doppler is false; the scalp itself is also cleaned
+        # (FSScalp) when present.
+        if kind == "scalp":
+            fs_result = _clean("fhr2", "scalp")
+        else:
+            fs_result = _clean("fhr1", "doppler")
+            if np.any(record.fhr2 > 0):
+                _clean("fhr2", "scalp")
+
+    # 2) WMFB baseline + morphology on the (cleaned) signal.
     fhri, fhr, toco, d, f = preprocess(
         record.fhr1, record.fhr2, record.toco, unreliable_signal
     )
@@ -664,6 +708,7 @@ def analyze(record, unreliable_signal=None, return_result: bool = False):
         "contractions": contractions,
         # per-deceleration type (early / late / variable / prolonged) — amnio port
         "deceleration_types": classify_decelerations(dec, fhri, baseline, contractions),
+        "false_signals": fs_result,
         "d": d,
         "f": f,
     }

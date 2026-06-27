@@ -40,7 +40,7 @@ def test_falsesig_has_urs_and_protected_expulsion():
     marks = ds.example_markers(name)
     assert any(m[1].startswith("$ URS") for m in marks), "no false-signal zones"
     # the expulsion mark is protected (the £ prefix marks a non-editable mark)
-    assert any(m[1] == "£Expulsion" for m in marks)
+    assert any(m[1] == "£2nd stage" for m in marks)
 
 
 @pytest.mark.parametrize("source", ["expert", "method", "raw"])

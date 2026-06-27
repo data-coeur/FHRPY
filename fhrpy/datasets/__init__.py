@@ -9,7 +9,7 @@ Everything ships with FHRPY (start timestamp zeroed, so recordings open at 00:00
   ``fs_dopmhr_train0001`` …, ``fs_dopmhr_val…``, ``fs_dopmhr_testcp…``,
   ``fs_dopmhr_testdbs…``, ``fs_scalp_train…``, ``fs_scalp_val…``,
   ``fs_scalp_test…``. The **train** records carry the expert false-signal labels
-  (``$ URS`` zones) + a protected ``£Expulsion`` marker; val/test are unlabelled.
+  (``$ URS`` zones) + a protected ``£2nd stage`` marker; val/test are unlabelled.
 * ``ctg/`` — ``ctg_example_01`` … ``ctg_example_11``, the FHRMA *Examples* full
   Doppler recordings (the notebook's showcase).
 
@@ -103,7 +103,7 @@ def expert_baseline(name: str):
         return z["baseline"].astype(float)
 
 
-def load_example(name: str, source: str = "expert", **viewer_opts):
+def load_and_process(name: str, source: str = "expert", **viewer_opts):
     """Build an :class:`fhrpy.viewer.FHRViewer` for a bundled example.
 
     ``source``:
@@ -146,3 +146,7 @@ def load_example(name: str, source: str = "expert", **viewer_opts):
             rec.fhri = np.asarray(rec.fhr1, dtype=float)
         return FHRViewer.from_record(rec, markers=markers, **viewer_opts)
     return FHRViewer(path, markers=(markers or None), **viewer_opts)
+
+
+# Backwards-compatible alias.
+load_example = load_and_process

@@ -231,39 +231,21 @@ class FHRViewer:
         fs = float(getattr(rec, "fs", 4.0) or 4.0)
         n = len(rec)
         urs_marks, zone_marks = [], []
+        fs_result = None
+        kind = self.false_signals_kind
 
-        # 1) False-signal detection & removal (upstream of the baseline).
-        fs_mask = None
-        if self.false_signals:
-            from ..falsesignal import detect_false_signals
-
-            res = detect_false_signals(
-                rec, kind=self.false_signals_kind, stage2_start=self.stage2_start
-            )
-            fs_mask = np.asarray(res["mask"], dtype=bool)
-            for start_s, end_s in res["segments"]:
-                samp = int(round(start_s * fs))
-                dur = int(round((end_s - start_s) * fs))
-                if dur > 0:
-                    urs_marks.append([samp, f"$ URS {dur}"])
-
-        # 2) WMFB baseline + morphology, on the FS-cleaned signal.
+        # WMFB baseline + morphology. analyze() enforces the FHRMA order: false
+        # signals detected & removed FIRST (only the detected channel zeroed, so
+        # max(FHR1,FHR2) lets the SCALP carry the baseline where Doppler is false),
+        # then the baseline. rec is left untouched (analyze copies internally), so
+        # the ORIGINAL samples are kept for display (false ones recoloured lighter).
         if self._do_analyze:
             from ..baseline import analyze as _analyze
             from ..io import encode_fhr
 
-            orig1, orig2 = rec.fhr1, rec.fhr2
-            if fs_mask is not None and fs_mask.any():
-                m = fs_mask[:n]
-                clean1 = rec.fhr1.copy()
-                clean2 = rec.fhr2.copy()
-                clean1[m] = 0  # 0 = lost signal -> treated as a gap by preprocess
-                clean2[m] = 0
-                rec.fhr1, rec.fhr2 = clean1, clean2  # baseline on the FS-cleaned signal
-            ma = _analyze(rec)
-            # Keep the ORIGINAL samples for display: the false-signal samples stay
-            # visible and are recoloured lighter by the viewer (FHRMA-toolbox style).
-            rec.fhr1, rec.fhr2 = orig1, orig2
+            ma = _analyze(rec, false_signals=(kind if self.false_signals else None),
+                          stage2_start=self.stage2_start)
+            fs_result = ma.get("false_signals")
             rec.fhri = np.asarray(ma["fhri"], dtype=float)
             rec.baseline = np.asarray(ma["baseline"], dtype=float)
             # The JS reads ``.rcfa`` as a fixed 12 bytes/sample layout (MHR present).
@@ -283,6 +265,18 @@ class FHRViewer:
                 for dt in ma.get("deceleration_types") or []:
                     zone_marks.append([int(round(float(dt["start_s"]) * fs)), dt["label"]])
             self.analyzed = True
+        elif self.false_signals:
+            from ..falsesignal import detect_false_signals
+
+            fs_result = detect_false_signals(rec, kind=kind, stage2_start=self.stage2_start)
+
+        # false-signal episodes -> light "$ URS" zones on the analysed channel.
+        if fs_result is not None:
+            for start_s, end_s in fs_result["segments"]:
+                samp = int(round(start_s * fs))
+                dur = int(round((end_s - start_s) * fs))
+                if dur > 0:
+                    urs_marks.append([samp, f"$ URS {dur}"])
 
         # URS first, then ACC/DEC, then any user marks (drawn order is sample-sorted).
         self.markers = urs_marks + zone_marks + self.markers
