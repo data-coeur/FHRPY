@@ -246,13 +246,18 @@ class FHRViewer:
             from ..baseline import analyze as _analyze
             from ..io import encode_fhr
 
+            orig1, orig2 = rec.fhr1, rec.fhr2
             if fs_mask is not None and fs_mask.any():
                 m = fs_mask[:n]
-                rec.fhr1 = rec.fhr1.copy()
-                rec.fhr2 = rec.fhr2.copy()
-                rec.fhr1[m] = 0  # 0 = lost signal -> treated as a gap by preprocess
-                rec.fhr2[m] = 0
+                clean1 = rec.fhr1.copy()
+                clean2 = rec.fhr2.copy()
+                clean1[m] = 0  # 0 = lost signal -> treated as a gap by preprocess
+                clean2[m] = 0
+                rec.fhr1, rec.fhr2 = clean1, clean2  # baseline on the FS-cleaned signal
             ma = _analyze(rec)
+            # Keep the ORIGINAL samples for display: the false-signal samples stay
+            # visible and are recoloured lighter by the viewer (FHRMA-toolbox style).
+            rec.fhr1, rec.fhr2 = orig1, orig2
             rec.fhri = np.asarray(ma["fhri"], dtype=float)
             rec.baseline = np.asarray(ma["baseline"], dtype=float)
             # The JS reads ``.rcfa`` as a fixed 12 bytes/sample layout (MHR present).

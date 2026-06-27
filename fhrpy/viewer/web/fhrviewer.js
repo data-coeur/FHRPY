@@ -43,6 +43,14 @@ const DEFAULT_COLORS = {
   TOCO: '#000000',
 };
 
+// Lighter shade per channel: false-signal samples are drawn in these instead of
+// the full color (like the FHRMA toolbox), rather than as an opaque column.
+const LIGHT_COLORS = {
+  FHR1: '#FFB3B3',     // light red
+  FHR2: '#B3B3FF',     // light blue
+  MHR: '#FFB3EC',      // light pink
+};
+
 /* ----------------------------------------------------------------------------
  * Signals — in-memory recording (parsing + markers), no network.
  * ------------------------------------------------------------------------- */
@@ -350,7 +358,26 @@ class GraphPlot {
     }
     return list
       .filter(([name]) => visible[name] !== false)
-      .map(([name, arr]) => ({ name, arr, color: DEFAULT_COLORS[name] || '#000' }));
+      .map(([name, arr]) => ({
+        name, arr, color: DEFAULT_COLORS[name] || '#000', light: LIGHT_COLORS[name],
+      }));
+  }
+
+  /** Per-sample boolean mask of false-signal (URS/NTA) regions, from the marks. */
+  _falseMask() {
+    const s = this.signals;
+    const N = s.RCF1.length;
+    const mask = new Uint8Array(N);
+    if (!s.Marks) return mask;
+    for (const m of s.Marks) {
+      if (!m || m[1][0] !== '$') continue;
+      const type = m[1].substring(2, 5);
+      if (type !== 'URS' && type !== 'NTA') continue;
+      const start = Math.max(0, m[0]);
+      const end = Math.min(N, m[0] + (parseInt(m[1].substring(6), 10) || 0));
+      for (let i = start; i < end; i++) mask[i] = 1;
+    }
+    return mask;
   }
 
   /* --- gap interpolation -------------------------------------------------- */
@@ -533,12 +560,9 @@ class GraphPlot {
         this.ctx.fillStyle = '#FF000033';
         this.fillSurface(this._baselineFor(s), s.RCFi.length ? s.baselineRCF : this._baselineFor(s),
           startSamp, startSamp + durSamp, 1, s.RCFi.length ? s.RCFi : s.RCF1);
-      } else if (type === 'NTA' || type === 'URS') {
-        if (!this.displayFalseSignals) continue;
-        // light pink: false signals read as "lighter / unreliable", not opaque grey.
-        this.ctx.fillStyle = '#FF78B43A';
-        this.ctx.fillRect(S, this.BorderTop, W, this.RCFHeight);
       }
+      // Note: false signals (URS/NTA) are NOT drawn as a column here — their
+      // samples are recoloured lighter in drawSigFast (FHRMA-toolbox style).
     }
   }
 
@@ -583,26 +607,43 @@ class GraphPlot {
     if (s.start < 0 || s.RCF1.length === 0) return;
     const d = Math.round((this.time - s.start) * s.srate);
     const channels = this._activeChannels();
+    const falseMask = this._falseMask();
+    const showFalse = this.displayFalseSignals;
 
     for (const ch of channels) {
       const arr = this._maybeInterpolate(ch.arr);
-      let y0 = NaN;
-      this.ctx.beginPath();
+      // Only the measured HR channels carry false-signal samples; FHRi/baseline
+      // are computed and always drawn in their own color.
+      const canFalse = ch.name === 'FHR1' || ch.name === 'FHR2' || ch.name === 'MHR';
       this.ctx.lineWidth = 1;
-      this.ctx.strokeStyle = ch.color;
+      let started = false, curColor = null, lastX = 0, lastY = 0, haveLast = false;
+      const flush = () => { if (started) { this.ctx.stroke(); started = false; } };
       for (let k = 0; k <= this.winlength * s.srate; k += 4) {
-        const x1 = this.BorderLeft + (k * this.graphWidth) / (s.srate * this.winlength);
-        const v = arr[d + k];
+        const idx = d + k;
+        const v = arr[idx];
         const ok = v > 40 && !Number.isNaN(v)
           && (this.interpolate
-            || (arr[d + k - 1] > 40 && arr[d + k - 2] > 40 && arr[d + k - 3] > 40));
-        if (ok) {
-          const y1 = this.BorderTop + (this.RCFHeight * (s.maxRCF - v)) / (s.maxRCF - s.minRCF);
-          if (!Number.isNaN(y0)) this.ctx.lineTo(x1, y1); else this.ctx.moveTo(x1, y1);
-          y0 = y1;
-        } else y0 = NaN;
+            || (arr[idx - 1] > 40 && arr[idx - 2] > 40 && arr[idx - 3] > 40));
+        if (!ok) { flush(); haveLast = false; continue; }
+        const isFalse = canFalse && falseMask[idx] === 1;
+        if (isFalse && !showFalse) { flush(); haveLast = false; continue; } // hidden
+        const color = isFalse ? (ch.light || ch.color) : ch.color;
+        const x1 = this.BorderLeft + (k * this.graphWidth) / (s.srate * this.winlength);
+        const y1 = this.BorderTop + (this.RCFHeight * (s.maxRCF - v)) / (s.maxRCF - s.minRCF);
+        if (!started || color !== curColor) {
+          flush();
+          this.ctx.beginPath();
+          this.ctx.strokeStyle = color;
+          curColor = color;
+          this.ctx.moveTo(haveLast ? lastX : x1, haveLast ? lastY : y1);
+          this.ctx.lineTo(x1, y1);
+          started = true;
+        } else {
+          this.ctx.lineTo(x1, y1);
+        }
+        lastX = x1; lastY = y1; haveLast = true;
       }
-      this.ctx.stroke();
+      flush();
     }
 
     // TOCO (filled to baseline + line)
@@ -1112,30 +1153,77 @@ export class FHRViewer {
     }
     const rect = this.graphEl.getBoundingClientRect();
     if (g.checkEditable(e.clientX - rect.left, e.clientY - rect.top)) return;
-    // start panning
+    // start panning (stop any ongoing fling first)
+    this._cancelFling();
     this._panState = { x0: e.clientX, t0: g.time };
+    this._panVel = 0;
+    this._panLast = { x: e.clientX, t: this._now() };
     this._panMove = (ev) => this._graphPan(ev);
     this._panUp = () => {
       document.removeEventListener('mousemove', this._panMove);
       document.removeEventListener('mouseup', this._panUp);
-      this.graph.redraw();
+      this._panLast = null;
+      this._startFling();   // grab-and-throw -> keep gliding with momentum
     };
     document.addEventListener('mousemove', this._panMove);
     document.addEventListener('mouseup', this._panUp);
   }
 
+  _now() { return typeof performance !== 'undefined' ? performance.now() : 0; }
+
+  _cancelFling() {
+    if (this._flingRAF && typeof cancelAnimationFrame !== 'undefined') {
+      cancelAnimationFrame(this._flingRAF);
+    }
+    this._flingRAF = null;
+    this._panVel = 0;
+  }
+
   _graphPan(e) {
     const g = this.graph, s = g.signals;
+    const secPerPx = g.winlength / Math.max(g.graphWidth, 1);
     const deltaX = e.clientX - this._panState.x0;
-    const secPerPx = g.winlength / g.graphWidth;
     let t = this._panState.t0 - secPerPx * deltaX;
     const tmax = s.lastTime - g.winlength + 120;
     if (t > tmax) t = tmax;
     if (t < s.start) t = s.start;
     g.time = t;
+    // track instantaneous velocity (signal-seconds per ms) for the fling
+    const now = this._now();
+    if (this._panLast) {
+      const dtMs = now - this._panLast.t;
+      if (dtMs > 0) this._panVel = -secPerPx * (e.clientX - this._panLast.x) / dtMs;
+    }
+    this._panLast = { x: e.clientX, t: now };
     g.redraw();
     this._updateScrollBar();
     this._emit('scroll', { time: g.time });
+  }
+
+  _startFling() {
+    const g = this.graph, s = g.signals;
+    if (!this._panVel || Math.abs(this._panVel) < 0.003
+        || typeof requestAnimationFrame === 'undefined') {
+      this._panVel = 0;
+      return;
+    }
+    let last = this._now();
+    const step = () => {
+      const now = this._now();
+      const dt = Math.min(now - last, 50);
+      last = now;
+      g.time += this._panVel * dt;
+      const tmax = s.lastTime - g.winlength + 120;
+      if (g.time > tmax) { g.time = tmax; this._panVel = 0; }
+      if (g.time < s.start) { g.time = s.start; this._panVel = 0; }
+      g.redraw();
+      this._updateScrollBar();
+      this._emit('scroll', { time: g.time });
+      this._panVel *= Math.pow(0.95, dt / 16);   // momentum decay
+      if (Math.abs(this._panVel) > 0.003) this._flingRAF = requestAnimationFrame(step);
+      else { this._panVel = 0; this._flingRAF = null; }
+    };
+    this._flingRAF = requestAnimationFrame(step);
   }
 
   /* ====================================================================== *
