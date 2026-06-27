@@ -33,6 +33,11 @@ except ImportError:  # pragma: no cover
 _DEFAULT_CHANNELS = ["FHR1", "FHR2", "MHR"]
 
 
+def _html_escape(s: str) -> str:
+    return (s.replace("&", "&amp;").replace("<", "&lt;")
+            .replace(">", "&gt;").replace('"', "&quot;"))
+
+
 def _read_asset(name: str) -> str:
     """Read a file from the package ``web/`` directory."""
     pkg = "fhrpy.viewer.web"
@@ -168,6 +173,51 @@ class FHRViewer:
         v = cls(path=None, markers=markers, **opts)
         v.data = data
         v.ext = "rcfa" if with_analysis else ("rcfm" if with_mhr else "rcf")
+        return v
+
+    @classmethod
+    def from_analysis(cls, record, analysis, markers=None,
+                      contractions: bool = True, deceleration_types: bool = True, **opts):
+        """Build a viewer from an **already-computed** analysis — no reprocessing.
+
+        ``analysis`` is the dict returned by :func:`fhrpy.baseline.analyze` (with
+        ``baseline``/``fhri``/``accelerations``/``decelerations``/``contractions``/
+        ``deceleration_types`` and, if false signals were run, ``false_signals``).
+        The zones + onset markers + false-signal ``$ URS`` zones are rebuilt from
+        it, so a recording that's already been read & analysed can be displayed
+        without running the pipeline again.
+        """
+        import copy as _copy
+
+        import numpy as np
+
+        fs = float(getattr(record, "fs", 4.0) or 4.0)
+        zone, urs = [], []
+        keys = [("ACC", "accelerations"), ("DEC", "decelerations")]
+        if contractions:
+            keys.append(("CON", "contractions"))
+        for typ, key in keys:
+            for seg in analysis.get(key) or []:
+                samp = int(round(float(seg[0]) * fs))
+                dur = int(round((float(seg[1]) - float(seg[0])) * fs))
+                if dur > 0:
+                    zone.append([samp, f"$ {typ} {dur}"])
+        if deceleration_types:
+            for dt in analysis.get("deceleration_types") or []:
+                zone.append([int(round(float(dt["start_s"]) * fs)), dt["label"]])
+        fsr = analysis.get("false_signals")
+        if fsr:
+            for s0, s1 in fsr["segments"]:
+                samp = int(round(s0 * fs))
+                dur = int(round((s1 - s0) * fs))
+                if dur > 0:
+                    urs.append([samp, f"$ URS {dur}"])
+
+        rec = _copy.copy(record)
+        rec.baseline = np.asarray(analysis["baseline"], dtype=float)
+        rec.fhri = np.asarray(analysis["fhri"], dtype=float)
+        v = cls.from_record(rec, markers=(urs + zone + (markers or [])), **opts)
+        v.analyzed = True
         return v
 
     # ------------------------------------------------------------------ #
@@ -353,11 +403,13 @@ class FHRViewer:
         opts.update(self._extra_opts)
         return json.dumps(opts)
 
-    def _build_html(self) -> str:
+    def _build_html(self, title: str | None = None) -> str:
         """Return a fully self-contained HTML page (JS + CSS + data inline)."""
         js = _read_asset("fhrviewer.js")
         css = _read_asset("fhrviewer.css")
         template = _read_asset("standalone.html")
+        if title is None:
+            title = self.path.name if self.path is not None else "FHR / CTG Viewer"
 
         # Strip the `export` keywords so the module body can be inlined directly.
         js_inline = (
@@ -372,6 +424,7 @@ class FHRViewer:
             .replace("/*__JS__*/", js_inline)
             .replace("{{DATA_B64}}", data_b64)
             .replace("{{EXT}}", self.ext)
+            .replace("{{TITLE}}", _html_escape(str(title)))
             .replace("{{MARKERS}}", json.dumps(self.markers))
             .replace("{{OPTIONS_JSON}}", self._options_json())
         )
@@ -380,10 +433,16 @@ class FHRViewer:
     # ------------------------------------------------------------------ #
     # rendering
     # ------------------------------------------------------------------ #
-    def to_html(self, path: str | Path) -> Path:
-        """Write a standalone offline HTML bundle (viewer + data) to ``path``."""
+    def to_html(self, path: str | Path, title: str | None = None) -> Path:
+        """Write a standalone offline HTML bundle (viewer + data) to ``path``.
+
+        The page ``<title>`` defaults to the recording name (or the output
+        filename when built from an in-memory record).
+        """
         path = Path(path)
-        path.write_text(self._build_html(), encoding="utf-8")
+        if title is None:
+            title = self.path.name if self.path is not None else path.stem
+        path.write_text(self._build_html(title=title), encoding="utf-8")
         return path
 
     def _srcdoc_iframe(self) -> str:
