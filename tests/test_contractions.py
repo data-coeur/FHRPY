@@ -77,3 +77,16 @@ def test_analyze_exposes_deceleration_types():
     ma = analyze(rec)
     assert isinstance(ma["deceleration_types"], list)
     assert len(ma["deceleration_types"]) == len(ma["decelerations"])
+
+
+def test_compute_features_standard_keys():
+    from fhrpy.baseline import compute_features
+    rec = read_fhr(ds.example_path("ctg_example_01"))
+    feats = compute_features(rec)
+    for k in ("analysis_duration_min", "baseline_mean", "acc_count", "dec_count",
+              "dec_early_count", "dec_late_count", "dec_variable_count",
+              "contraction_count", "dec_to_contraction_ratio", "stv_msd",
+              "ltv_delta_mean", "fhr_time_below_110_percent"):
+        assert k in feats
+    assert feats["dec_count"] == len(__import__("fhrpy.baseline", fromlist=["analyze"]).analyze(rec)["decelerations"])
+    assert feats["contraction_count"] >= 0
