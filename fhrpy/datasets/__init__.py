@@ -109,10 +109,15 @@ def load_example(name: str, source: str = "expert", **viewer_opts):
         run_fs = e.get("false_signals", category == "falsesig")
         return FHRViewer(path, analyze=True, false_signals=run_fs,
                          false_signals_kind=e.get("kind", "doppler"), **viewer_opts)
+    if source == "fs":
+        # false-signal detection ONLY — no baseline / accel-decel / contraction
+        # morphology (used for the false-signal label-vs-prediction comparison).
+        return FHRViewer(path, analyze=False, false_signals=True,
+                         false_signals_kind=e.get("kind", "doppler"), **viewer_opts)
     if source == "raw":
         return FHRViewer(path, **viewer_opts)
     if source != "expert":
-        raise ValueError("source must be 'expert', 'method' or 'raw'")
+        raise ValueError("source must be 'expert', 'method', 'fs' or 'raw'")
 
     markers = example_markers(name)
     baseline = expert_baseline(name)
