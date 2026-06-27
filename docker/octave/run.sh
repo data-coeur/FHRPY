@@ -24,7 +24,7 @@ EXTRA="$OUT/extra_inputs"
 mkdir -p "$OUT" "$EXTRA"
 
 # --- Default dataset location (read-only reference, outside the repo) ---------
-DATASET_DIR="${FHRPY_DATASET_DIR:-/home/sam/Desktop/fhr-demo/matlab/src/FHRMA/FHRMAdataset}"
+DATASET_DIR="${FHRPY_DATASET_DIR:-/home/samuelboudet/Projets/fhr-demo/matlab/src/FHRMA/FHRMAdataset}"
 
 # Stage a couple of SHORT dataset recordings next to the example so the harness
 # is self-contained at run time (we copy, never depend on the read-only path

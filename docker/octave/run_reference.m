@@ -113,12 +113,39 @@ for k = 1:numel(files)
     falseAcc = falseAcc;
     falseDec = falseDec;
 
+    % --- contractions: the accelerations of aamwmfb(TOCO*2) (amnio BLsam(TOCO*2)) ---
+    % TOCO is the raw fhropen output (byte/2), exactly what fhrpy.detect_contractions
+    % feeds as wmfb(record.toco * 2).
+    [~, contractions, ~] = aamwmfb(double(TOCO) * 2);
+
+    % --- standard CTG features over the valid window [d:f] (compute_features parity) ---
+    w = max(1, d):min(numel(FHRi), f);
+    feat = struct();
+    feat.fhr_mean = mean(FHRi(w));
+    feat.baseline_mean = mean(baseline(w));
+    feat.fhr_time_below_110_percent = sum(FHRi(w) < 110) / numel(w) * 100;
+    feat.fhr_time_above_160_percent = sum(FHRi(w) > 160) / numel(w) * 100;
+    feat.baseline_time_below_110_percent = sum(baseline(w) < 110) / numel(w) * 100;
+    feat.stv_msd = mean(abs(diff(FHRi(w))));
+    feat.acc_count = size(acc, 2);
+    feat.dec_count = size(dec, 2);
+    feat.contraction_count = size(contractions, 2);
+    if size(dec, 2) > 0
+        dd = extractAccDecDataAmnio(dec, FHRi, baseline, 'dec');
+        feat.dec_amplitude_mean = mean(dd.amplitude);
+        feat.dec_surface_total = sum(dd.surface);
+        feat.dec_duration_mean = mean(dd.duration);
+    else
+        feat.dec_amplitude_mean = NaN; feat.dec_surface_total = 0; feat.dec_duration_mean = NaN;
+    end
+
     outfile = fullfile(OUTDIR, sprintf('ref_%s.mat', name));
     save('-v7', outfile, ...
         'FHR1raw', 'FHR2raw', 'MHR', 'TOCO', 'timestamp', ...
         'FHRi', 'FHRpre', 'TOCOpre', 'd', 'f', ...
         'baseline', 'bl_FHR1', ...
         'acc', 'dec', 'falseAcc', 'falseDec', ...
+        'contractions', 'feat', ...
         'multisig_compiled');
     fprintf('wrote %s\n', outfile);
 end

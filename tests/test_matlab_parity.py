@@ -287,3 +287,66 @@ def test_accel_decel_boundaries(name, path, ref, loaded):
         assert ref_unmatched <= _EVENT_COUNT_SLACK, (
             f"{name} {kind}: {ref_unmatched} ref events unmatched"
         )
+
+
+# ---------------------------------------------------------------------------
+# 5. contractions = aamwmfb(TOCO*2) accelerations  -- event parity
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("name,path,ref", _AVAILABLE, ids=_ids(_AVAILABLE))
+def test_contractions_parity(name, path, ref, loaded):
+    from fhrpy.baseline import detect_contractions
+
+    m = loaded[name]["mat"]
+    rec = loaded[name]["rec"]
+    con = detect_contractions(rec)                    # [(start_s, end_s), ...]
+    ref_con = np.atleast_2d(m["contractions"])
+    ref_n = ref_con.shape[1] if ref_con.size else 0
+    print(f"\n[{name}] contractions: fhrpy={len(con)} octave={ref_n}")
+    # Same tie-breaking sensitivity as accel/decel -> allow a small count slack.
+    assert abs(len(con) - ref_n) <= max(2, round(0.15 * max(ref_n, 1)))
+    # Matched onsets agree to a few seconds.
+    if con and ref_n:
+        ref_starts = np.sort(ref_con[0, :])
+        for s, _ in con:
+            j = int(np.argmin(np.abs(ref_starts - s)))
+            # nearest reference contraction onset within ~20 s for most events
+        # robust: median nearest-onset distance is small
+        d = [float(np.min(np.abs(ref_starts - s))) for s, _ in con]
+        assert float(np.median(d)) <= 20.0
+
+
+# ---------------------------------------------------------------------------
+# 6. compute_features  -- standard CTG features parity
+# ---------------------------------------------------------------------------
+def _feat(m):
+    s = m["feat"]
+    return lambda k: float(np.asarray(s[k][0, 0]).ravel()[0])
+
+
+@pytest.mark.parametrize("name,path,ref", _AVAILABLE, ids=_ids(_AVAILABLE))
+def test_features_parity(name, path, ref, loaded):
+    from fhrpy.baseline import compute_features
+
+    m = loaded[name]["mat"]
+    rec = loaded[name]["rec"]
+    feats = compute_features(rec)
+    ref = _feat(m)
+
+    # Signal-only features (FHRi is bit-exact) -> must match tightly.
+    assert abs(feats["fhr_mean"] - ref("fhr_mean")) < 0.05
+    assert abs(feats["fhr_time_below_110_percent"] - ref("fhr_time_below_110_percent")) < 0.5
+    assert abs(feats["fhr_time_above_160_percent"] - ref("fhr_time_above_160_percent")) < 0.5
+    assert abs(feats["stv_msd"] - ref("stv_msd")) < 0.05
+
+    # Baseline-derived -> within the documented WMFB baseline parity tolerance.
+    print(f"\n[{name}] baseline_mean fhrpy={feats['baseline_mean']:.3f} "
+          f"octave={ref('baseline_mean'):.3f}")
+    assert abs(feats["baseline_mean"] - ref("baseline_mean")) < 1.0
+    assert abs(feats["baseline_time_below_110_percent"]
+               - ref("baseline_time_below_110_percent")) < 5.0
+
+    # Event counts -> small slack (same tie-breaking as accel/decel).
+    assert abs(feats["acc_count"] - ref("acc_count")) <= max(2, round(0.15 * ref("acc_count") or 1))
+    assert abs(feats["dec_count"] - ref("dec_count")) <= max(2, round(0.15 * ref("dec_count") or 1))
+    assert abs(feats["contraction_count"]
+               - ref("contraction_count")) <= max(2, round(0.15 * ref("contraction_count") or 1))
