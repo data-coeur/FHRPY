@@ -447,6 +447,10 @@ class GraphPlot {
     this.displayMorpho = true;        // baseline + accel/decel zones toggle
     this.displayContractions = true;  // contraction (TOCO) zones toggle
     this.displayFalseSignals = true;  // false-signal (URS/NTA) zones toggle
+    // The false-signal mask applies ONLY to the analysed fetal channel (the
+    // Doppler FHR1 for kind='doppler', the scalp FHR2 for kind='scalp'); the
+    // maternal MHR reference is never a "false fetal signal".
+    this.falseSignalChannel = 'FHR1';
     this.fullGrid = 1;
     this.is3cm = 0;
     this.time = 0;
@@ -462,6 +466,7 @@ class GraphPlot {
     this.markRects = [];
     this.measurer = {};
     this.newMark = {};
+    this.box1515 = {};   // reference cursor: crosshair + 30 bpm x 15 s rectangle
 
     this.eventTextEdit.addEventListener('keyup', () => {
       this.eventTextEdit.style.height = '0px';
@@ -767,9 +772,9 @@ class GraphPlot {
 
     for (const ch of channels) {
       const arr = this._maybeInterpolate(ch.arr);
-      // Only the measured HR channels carry false-signal samples; FHRi/baseline
-      // are computed and always drawn in their own color.
-      const canFalse = ch.name === 'FHR1' || ch.name === 'FHR2' || ch.name === 'MHR';
+      // Only the analysed fetal channel carries the false-signal mask (NOT the
+      // maternal MHR, which is the reference, nor the computed FHRi/baseline).
+      const canFalse = ch.name === this.falseSignalChannel;
       this.ctx.lineWidth = 1;
       let started = false, curColor = null, lastX = 0, lastY = 0, haveLast = false;
       const flush = () => { if (started) { this.ctx.stroke(); started = false; } };
@@ -893,7 +898,27 @@ class GraphPlot {
     this.svg.appendChild(t); return t;
   }
 
+  _svgAttr(el, attrs) { for (const k in attrs) el.setAttributeNS(null, k, attrs[k]); }
+
+  /* --- reference cursor: crosshair + 30 bpm x 15 s box (ported from v2) ---- */
+  initializeBox1515() {
+    this.clearBox1515();
+    this.box1515.hline = this._svgLine(this.BorderLeft, -100, this.graphWidth + this.BorderLeft, -100, '#555');
+    this.box1515.vline = this._svgLine(-100, this.BorderTop, -100, this.BorderTop + this.graphHeight, '#555');
+    const r = document.createElementNS(SVGNS, 'rect');
+    r.setAttributeNS(null, 'fill', 'none');
+    r.setAttributeNS(null, 'stroke', '#555');
+    this.svg.appendChild(r);
+    this.box1515.rect = r;
+  }
+
+  clearBox1515() {
+    this._svgRemove(this.box1515.hline, this.box1515.vline, this.box1515.rect);
+    this.box1515 = {};
+  }
+
   initializeMeasurer() {
+    this.clearBox1515();
     this.measurer.hline = this._svgLine(this.BorderLeft, -100, this.graphWidth + this.BorderLeft, -100, 'black');
     this.measurer.textY = this._svgText(this.BorderLeft + 5, undefined);
     this.measurer.vline = this._svgLine(-100, this.BorderTop, -100, this.BorderTop + this.graphHeight, 'black');
@@ -910,6 +935,7 @@ class GraphPlot {
   }
 
   initializeNewMark(defaultText) {
+    this.clearBox1515();
     const color = (defaultText === 'Question' || (defaultText.length > 0 && defaultText[0] === '£')) ? '#0000FF' : '#FFBB00';
     this.newMark.textEvent = this._svgText(0, this.BorderTop + 17);
     this.newMark.textEvent.setAttributeNS(null, 'fill', color);
@@ -1021,6 +1047,21 @@ class GraphPlot {
       this.newMark.vline.setAttributeNS(null, 'x1', mousex);
       this.newMark.vline.setAttributeNS(null, 'x2', mousex);
       this.newMark.textEvent.setAttributeNS(null, 'x', mousex + 5);
+    } else {
+      // 'None' (default): reference cursor = crosshair + a 30 bpm x 15 s box
+      // anchored at the pointer, to gauge amplitude/variability at a glance.
+      if (!this.box1515.rect) this.initializeBox1515();
+      const size15 = (this.RCFHeight * 15) / (this.signals.maxRCF - this.signals.minRCF);
+      this._svgAttr(this.box1515.hline, {
+        x1: this.BorderLeft, y1: mousey, x2: this.graphWidth + this.BorderLeft, y2: mousey,
+      });
+      this._svgAttr(this.box1515.vline, {
+        x1: mousex, y1: this.BorderTop, x2: mousex, y2: this.BorderTop + this.graphHeight,
+      });
+      this._svgAttr(this.box1515.rect, {
+        x: mousex, y: mousey - size15, height: 2 * size15,
+        width: (15 / this.winlength) * this.graphWidth,
+      });
     }
   }
 
@@ -1111,6 +1152,7 @@ class FHRViewer {
       this.graph.channels = ['FHRi', 'FHR1', 'FHR2', 'MHR'].slice(0, opts.signalsPerGraph);
     }
     if (typeof opts.tzOffset === 'number') this.graph.tzOffset = opts.tzOffset;
+    if (typeof opts.falseSignalChannel === 'string') this.graph.falseSignalChannel = opts.falseSignalChannel;
     if (opts.scale === 3) this.graph.is3cm = 1;
     if (opts.interpolate) this.graph.interpolate = true;
     if (opts.zones === false) this.graph.displayMorpho = false;

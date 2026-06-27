@@ -292,6 +292,10 @@ class GraphPlot {
     this.displayMorpho = true;        // baseline + accel/decel zones toggle
     this.displayContractions = true;  // contraction (TOCO) zones toggle
     this.displayFalseSignals = true;  // false-signal (URS/NTA) zones toggle
+    // The false-signal mask applies ONLY to the analysed fetal channel (the
+    // Doppler FHR1 for kind='doppler', the scalp FHR2 for kind='scalp'); the
+    // maternal MHR reference is never a "false fetal signal".
+    this.falseSignalChannel = 'FHR1';
     this.fullGrid = 1;
     this.is3cm = 0;
     this.time = 0;
@@ -613,9 +617,9 @@ class GraphPlot {
 
     for (const ch of channels) {
       const arr = this._maybeInterpolate(ch.arr);
-      // Only the measured HR channels carry false-signal samples; FHRi/baseline
-      // are computed and always drawn in their own color.
-      const canFalse = ch.name === 'FHR1' || ch.name === 'FHR2' || ch.name === 'MHR';
+      // Only the analysed fetal channel carries the false-signal mask (NOT the
+      // maternal MHR, which is the reference, nor the computed FHRi/baseline).
+      const canFalse = ch.name === this.falseSignalChannel;
       this.ctx.lineWidth = 1;
       let started = false, curColor = null, lastX = 0, lastY = 0, haveLast = false;
       const flush = () => { if (started) { this.ctx.stroke(); started = false; } };
@@ -993,6 +997,7 @@ export class FHRViewer {
       this.graph.channels = ['FHRi', 'FHR1', 'FHR2', 'MHR'].slice(0, opts.signalsPerGraph);
     }
     if (typeof opts.tzOffset === 'number') this.graph.tzOffset = opts.tzOffset;
+    if (typeof opts.falseSignalChannel === 'string') this.graph.falseSignalChannel = opts.falseSignalChannel;
     if (opts.scale === 3) this.graph.is3cm = 1;
     if (opts.interpolate) this.graph.interpolate = true;
     if (opts.zones === false) this.graph.displayMorpho = false;

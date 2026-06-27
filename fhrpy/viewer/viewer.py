@@ -344,6 +344,9 @@ class FHRViewer:
             opts["range"] = [float(self.rcf_min), float(self.rcf_max)]
         if self.safe_min is not None and self.safe_max is not None:
             opts["safeZone"] = [float(self.safe_min), float(self.safe_max)]
+        if self.false_signals:
+            # the false-signal mask belongs to the analysed fetal channel only
+            opts["falseSignalChannel"] = "FHR2" if self.false_signals_kind == "scalp" else "FHR1"
         opts.update(self._extra_opts)
         return json.dumps(opts)
 
