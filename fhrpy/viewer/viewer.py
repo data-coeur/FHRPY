@@ -80,6 +80,15 @@ class FHRViewer:
         zones. ``false_signals_kind`` selects the model (``"doppler"`` default or
         ``"scalp"``); ``stage2_start`` is the optional 4 Hz second-stage sample
         index. Requires NumPy/SciPy.
+    timezone:
+        Time-axis zone: hours east of UTC (default ``0``) or an IANA name such as
+        ``"Europe/Paris"`` (daylight-saving time handled by the browser).
+    **opts:
+        Any other keyword is forwarded as-is to the JS viewer options, e.g.
+        ``labels`` (translated tooltips / captions), ``delays`` (per-sensor delay
+        compensation at display time), ``follow`` (lock the view on the live
+        end), ``bytesPerSample`` / ``headerBytes`` (force the binary layout when
+        the extension is ambiguous — OpenCTG ``.fhr`` files are 8 bytes/sample).
     """
 
     def __init__(
@@ -96,7 +105,7 @@ class FHRViewer:
         false_signals: bool = False,
         false_signals_kind: str = "doppler",
         stage2_start: int | None = None,
-        timezone: float = 0.0,
+        timezone: float | str = 0.0,
         rcf_min: float | None = None,
         rcf_max: float | None = None,
         safe_min: float | None = None,
@@ -124,9 +133,10 @@ class FHRViewer:
         # per-deceleration type markers (early/late/variable/prolonged).
         self.analyze_contractions = bool(analyze_contractions)
         self.analyze_decel_types = bool(analyze_decel_types)
-        # Time-axis timezone, in hours east of UTC. Default 0 (UTC) so an
-        # anonymised epoch-0 start reads 00:00 on the time axis.
-        self.timezone = float(timezone)
+        # Time-axis timezone: hours east of UTC (default 0 = UTC, so an
+        # anonymised epoch-0 start reads 00:00) or an IANA zone name such as
+        # "Europe/Paris" (daylight-saving time handled by the browser).
+        self.timezone = timezone if isinstance(timezone, str) else float(timezone)
 
         # Top FHR grid bounds (bpm) and the central safe/normal band. ``None``
         # keeps the JS defaults (50..210 grid, 110..160 safe band).
@@ -387,8 +397,11 @@ class FHRViewer:
             "scale": self.scale,
             "interpolate": self.interpolate,
             "zones": self.zones,
-            "tzOffset": int(round(self.timezone * 3600)),
         }
+        if isinstance(self.timezone, str):
+            opts["timeZone"] = self.timezone
+        else:
+            opts["tzOffset"] = int(round(self.timezone * 3600))
         if self.channels:
             opts["channels"] = self.channels
         if self.signals_per_graph is not None:
@@ -415,6 +428,7 @@ class FHRViewer:
         js_inline = (
             js.replace("export class FHRViewer", "class FHRViewer")
             .replace("export function upgradeAll", "function upgradeAll")
+            .replace("export { Signals };", "")
             .replace("export default FHRViewer;", "")
         )
 
@@ -562,10 +576,29 @@ class FHRViewer:
         self.scale = 3 if int(cm_per_min) == 3 else 1
         return self._post("setScale", self.scale)
 
-    def set_timezone(self, hours: float):
-        """Set the time-axis timezone, in hours east of UTC (0 = UTC)."""
-        self.timezone = float(hours)
+    def set_timezone(self, zone: float | str):
+        """Set the time-axis timezone: hours east of UTC (0 = UTC) or an IANA name."""
+        if isinstance(zone, str):
+            self.timezone = zone
+            return self._post("setTimezone", zone)
+        self.timezone = float(zone)
         return self._post("setTimezone", int(round(self.timezone * 3600)))
+
+    def set_delays(self, delays: dict | None):
+        """Per-sensor estimation delays (seconds), compensated at display time.
+
+        Keys ``doppler``, ``scalp``, ``mecg``, ``mhrToco``, ``mhrOximeter``,
+        ``toco``; a ``None`` value means unknown (no shift for that sensor) and
+        ``None`` as a whole draws the raw samples again. The file is never
+        modified.
+        """
+        self._extra_opts["delays"] = delays
+        return self._post("setDelays", delays)
+
+    def set_follow(self, on: bool):
+        """Lock the view on the live end of the recording (``True``) or release it."""
+        self._extra_opts["follow"] = bool(on)
+        return self._post("setFollow", bool(on))
 
     def set_channel_visible(self, name: str, visible: bool):
         return self._post("setChannelVisible", name, bool(visible))
@@ -596,13 +629,18 @@ class FHRViewer:
         self.safe_min, self.safe_max = float(min_bpm), float(max_bpm)
         return self._post("setSafeZone", float(min_bpm), float(max_bpm))
 
-    def print(self):
-        """Download a multi-page A4-landscape PDF of the whole recording.
+    def print(self, cm_per_min: int = 1, **options):
+        """Download a multi-page landscape PDF of the whole recording.
 
-        Works in a notebook (the PDF is assembled in-page and saved via a Blob
-        download), where a print-dialog pop-up would be blocked.
+        ``cm_per_min`` is 1 (default) or 3; ``options`` are forwarded to the JS
+        ``print()`` — ``paper`` (``"A4"`` / ``"letter"`` / ``"legal"``),
+        ``header`` (list of lines printed on every page), ``footer``,
+        ``fillLastPage``, ``filename``. Works in a notebook (the PDF is
+        assembled in-page and saved via a Blob download), where a print-dialog
+        pop-up would be blocked.
         """
-        return self._post("print")
+        opts = {"cmPerMin": 3 if int(cm_per_min) == 3 else 1, **options}
+        return self._post("print", opts)
 
     # ------------------------------------------------------------------ #
     # inbound events (viewer -> Python) — best effort
