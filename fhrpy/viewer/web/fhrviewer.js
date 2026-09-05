@@ -18,21 +18,39 @@
  *   - public JS API + event emitter + postMessage bridge for a Python backend
  *
  * Binary format (little-endian), ported from fhrsignal-source.js:
- *   Header: [uint32 magic][uint32 startEpoch seconds]
- *   Optional [uint32 code] (1234567 recording / 1234568 finished) — skipped if present.
- *   Then N samples at 4 Hz:
+ *   Header: [uint32 startEpoch seconds] (dataset / acquisition files, 4 bytes)
+ *           or [uint32 magic][uint32 startEpoch seconds] (recorder files, 8);
+ *           the length is auto-detected by divisibility of the body (the rule
+ *           of fhrpy.io.read_fhr) unless `opts.headerBytes` forces it.
+ *   Optional [uint32 code] (1234567 recording / 1234568 finished) after an
+ *           8-byte header: the legacy streamed payload — skipped if present.
+ *   Then N samples at 4 Hz — bytes per sample from the extension, or from
+ *   `opts.bytesPerSample` when the extension is ambiguous (OpenCTG's `.fhr`
+ *   is 8 bytes/sample, FHRMA's is 6):
  *     .rcf / .fhr  (6 bytes):  u16 FHR1, u16 FHR2, u8 TOCO, u8 qual
- *     .rcfm        (8 bytes):  u16 FHR1, u16 FHR2, u16 MHR, u8 TOCO, u8 qual
+ *     .rcfm / .fhrm (8 bytes): u16 FHR1, u16 FHR2, u16 MHR, u8 TOCO, u8 qual
  *     .rcfa       (12 bytes):  + u16 FHRi (preprocessed), u16 baseline
  *   Scaling: FHR/MHR/FHRi/baseline = raw/4 ; TOCO = raw/2.
  *   Missing / lost signal = value 0 (or <=40 for FHR) -> breaks the curve.
+ *
+ * Marker text conventions (companion `.fhrh` / `.marks` file):
+ *   `$ TTT N`  computed zone (ACC / DEC / CON / URS), painted, never as text
+ *   `£text`    protected marker (sensor change, monitor note): blue, not editable
+ *   `£!text`   protected ALERT marker (device failure): red, not editable
+ *   `§key k=v` protected metadata (device model, serial…): never drawn
+ *   anything else: a free, editable event marker (orange)
  */
 
 const SVGNS = 'http://www.w3.org/2000/svg';
 const MAGIC = 1234555;          // header magic (validity check, best-effort)
 const CODE_RECORDING = 1234567; // optional data-stream code
 const CODE_FINISHED = 1234568;
-const GRID_COLOR = '#AAFFAA';   // classic CTG green paper
+const GRID_COLOR = '#AAFFAA';   // classic CTG green grid
+const PAPER_COLOR = '#FFFFFF';  // pure white paper, on screen and in print
+const SAFE_BAND_COLOR = '#F0F0F0';      // grey band behind the normal FHR range
+const MARK_COLOR = '#FFBB00';           // free event markers (orange)
+const PROTECTED_MARK_COLOR = '#0000FF'; // `£` markers (blue)
+const ALERT_MARK_COLOR = '#c2483b';     // `£!` markers: device alert / failure (red)
 
 const DEFAULT_COLORS = {
   FHR1: '#FF0000',     // red
@@ -66,6 +84,9 @@ class Signals {
     this.start = -1;
     this.lastTime = -1;
     this.bytesBySample = 8;
+    // Layout hints from the host (FHRViewer opts.bytesPerSample / opts.headerBytes):
+    // null / 'auto' = infer from the extension / detect from the buffer size.
+    this.layout = { bytesPerSample: null, headerBytes: 'auto' };
     this.editingMark = false;
     this._reset();
   }
@@ -77,39 +98,70 @@ class Signals {
     this.RCFi = [];
     this.baselineRCF = [];
     this.TOCO = [];
+    this.Q = [];                // quality / sensor-mode byte of each sample (bit layout of fhrsave.m)
     this.Marks = [];
+    // Bumped by every change of the marks: the display cache keys on it, and
+    // editing a sensor-change marker in place must not keep a stale alignment.
+    this.marksVersion = (this.marksVersion || 0) + 1;
     this.start = startTime;
     this.lastTime = startTime;
     this.badSigPoints = 0;
   }
 
-  /** Decode an ArrayBuffer into the signal arrays. `ext` selects bytes/sample. */
-  loadBuffer(arrayBuffer, ext = 'rcfm') {
+  /** Bytes per sample implied by an extension: `.rcf` / `.fhr` 6, `.rcfa` 12, `.rcfm` / `.fhrm` / other 8. */
+  static bytesPerSampleFor(ext) {
     const last = (ext || '').toLowerCase().replace('.', '').slice(-1);
-    if (last === 'r' || last === 'f') this.bytesBySample = 6;
-    else if (last === 'm') this.bytesBySample = 8;
-    else if (last === 'a') this.bytesBySample = 12;
-    else this.bytesBySample = 8;
+    if (last === 'r' || last === 'f') return 6;
+    if (last === 'a') return 12;
+    return 8;
+  }
+
+  /**
+   * Header length of a buffer, among `candidates` tried in order: 4 (dataset
+   * and acquisition files: epoch only), 8 (recorder files: magic + epoch) or
+   * 12 (8 + the legacy streamed code word, accepted only when the word really
+   * is one). The first candidate whose body is a whole number of samples wins
+   * — the divisibility rule of fhrpy.io.read_fhr; when none fits (a file still
+   * being written) the first candidate is assumed. `.rcf*` files are recorder
+   * files and prefer 8; every other extension prefers 4. Reading a 4-byte header as
+   * an 8-byte one shifts every sample and draws a trace that looks plausible
+   * but is wrong, which is why this is detected rather than assumed.
+   */
+  static detectHeader(view, stride, candidates) {
+    const total = view.byteLength;
+    for (const h of candidates) {
+      if (total < h || (total - h) % stride !== 0) continue;
+      if (h === 12) {
+        const code = view.getUint32(8, true);
+        if (code !== CODE_RECORDING && code !== CODE_FINISHED) continue;
+      }
+      return h;
+    }
+    return candidates[0];
+  }
+
+  /**
+   * Decode an ArrayBuffer into the signal arrays. `ext` selects the bytes per
+   * sample unless `layout.bytesPerSample` (or the host's `opts.bytesPerSample`)
+   * says otherwise; the header length is auto-detected unless
+   * `layout.headerBytes` (or `opts.headerBytes`) is 4 or 8.
+   */
+  loadBuffer(arrayBuffer, ext = 'rcfm', layout = {}) {
+    const name = (ext || '').toLowerCase().replace('.', '');
+    const bps = layout.bytesPerSample || this.layout.bytesPerSample;
+    this.bytesBySample = (bps === 6 || bps === 8 || bps === 12) ? bps : Signals.bytesPerSampleFor(name);
 
     const view = new DataView(arrayBuffer);
     const total = view.byteLength;
-    let off = 0;
-    // Header: magic + startEpoch. (Some files carry magic=0; tolerate that.)
-    view.getUint32(0, true); // magic (unused beyond documentation)
-    const startEpoch = view.getUint32(4, true);
-    off = 8;
-
-    // Optional code word: present in the legacy streamed data payload.
-    if (total - off >= 4) {
-      const code = view.getUint32(off, true);
-      if (code === CODE_RECORDING || code === CODE_FINISHED) off += 4;
-    }
-
-    // If the remaining bytes are not a whole number of samples, the code word
-    // was probably absent; off stays at 8 (header only).
-    if ((total - off) % this.bytesBySample !== 0 && (total - 8) % this.bytesBySample === 0) {
-      off = 8;
-    }
+    // Recorder files (`.rcf*`) carry magic + epoch, dataset and acquisition
+    // files the epoch only: that is the preference when nothing divides.
+    const forced = layout.headerBytes || this.layout.headerBytes;
+    const candidates = forced === 4 ? [4] : forced === 8 ? [8, 12]
+      : name.startsWith('rcf') ? [8, 12, 4] : [4, 8, 12];
+    const off = Signals.detectHeader(view, this.bytesBySample, candidates);
+    // The epoch sits in the last four bytes of the 4- or 8-byte header proper.
+    const epochAt = off >= 8 ? 4 : 0;
+    const startEpoch = total >= epochAt + 4 ? view.getUint32(epochAt, true) : 0;
 
     this._reset(startEpoch);
     const nSamp = Math.floor((total - off) / this.bytesBySample);
@@ -134,6 +186,7 @@ class Signals {
     this.RCF1.push(f1);
     this.RCF2.push(f2);
     this.TOCO.push(toco / 2);
+    this.Q.push(qual | 0);
     if (this.bytesBySample > 6) {
       this.RCFm.push(rcfm / 4);
       if (this.bytesBySample > 8) {
@@ -163,6 +216,7 @@ class Signals {
   /** Parse a marker text blob: one mark per line, `SSSSSSS text` (7-digit sample). */
   loadMarkers(text) {
     this.Marks = [];
+    this.marksVersion++;
     const lines = (text || '').split('\n');
     for (const line of lines) {
       if (line.length > 5) {
@@ -175,6 +229,7 @@ class Signals {
     // Accept [[sample, text], ...]; keep sorted by sample.
     this.Marks = (list || []).map((m) => [Math.round(m[0]), String(m[1])]);
     this.Marks.sort((a, b) => a[0] - b[0]);
+    this.marksVersion++;
   }
 
   getMarks() {
@@ -185,12 +240,14 @@ class Signals {
     let index = 0;
     for (let i = 0; i < this.Marks.length; i++) if (this.Marks[i][0] < s) index++;
     this.Marks.splice(index, 0, [s, t]);
+    this.marksVersion++;
     return index;
   }
 
   updateMark(n, t) {
     this.Marks[n][1] = t;
     if (t === '') this.Marks.splice(n, 1);
+    this.marksVersion++;
   }
 }
 
@@ -267,6 +324,34 @@ class ScrollBar {
 }
 
 /* ----------------------------------------------------------------------------
+ * Print geometry and text encoding.
+ * ------------------------------------------------------------------------- */
+/**
+ * Printable page sizes in points, landscape: [width, height, printable strip
+ * width in cm]. The third value is what the strip is drawn at, so a page holds
+ * ~27 min at 1 cm/min on A4.
+ */
+const PRINT_PAPERS = { A4: [842, 595, 27], letter: [792, 612, 25.5], legal: [1008, 612, 33] };
+/** What a page reserves above the strip: top margin, the gap, eight header lines, the logo. */
+const PRINT_TOP_RESERVE_PT = 20 + 8 + 8 * 11 + 26;
+/** …and below it, for the footer line. */
+const PRINT_FOOT_RESERVE_PT = 16;
+/**
+ * The code points WinAnsiEncoding places in its 0x80-0x9F block, mapped to the
+ * byte that encodes them. They are NOT Latin-1, so writing their code point
+ * straight out would draw another glyph — among them the euro sign, the
+ * typographic quotes and the French ligature œ, which a name or a ward label
+ * ("Maternité du Cœur") carries. Everything outside WinAnsi still becomes '?':
+ * embedding a Unicode font is a separate piece of work.
+ */
+const WIN_ANSI_HIGH = {
+  0x20ac: 0x80, 0x201a: 0x82, 0x0192: 0x83, 0x201e: 0x84, 0x2026: 0x85, 0x2020: 0x86, 0x2021: 0x87,
+  0x02c6: 0x88, 0x2030: 0x89, 0x0160: 0x8a, 0x2039: 0x8b, 0x0152: 0x8c, 0x017d: 0x8e, 0x2018: 0x91,
+  0x2019: 0x92, 0x201c: 0x93, 0x201d: 0x94, 0x2022: 0x95, 0x2013: 0x96, 0x2014: 0x97, 0x02dc: 0x98,
+  0x2122: 0x99, 0x0161: 0x9a, 0x203a: 0x9b, 0x0153: 0x9c, 0x017e: 0x9e, 0x0178: 0x9f,
+};
+
+/* ----------------------------------------------------------------------------
  * GraphPlot — canvas grid + curves + svg overlays. Ported maths.
  * ------------------------------------------------------------------------- */
 class GraphPlot {
@@ -286,7 +371,14 @@ class GraphPlot {
     this.BorderLeft = 0;
     this.BorderRight = 0;
     this.BorderTop = 0;
-    this.BorderBottom = 15;
+    // Every size below is written in *screen* pixels: fonts, the chips the
+    // figures sit in, line widths, the bottom band that carries the time axis.
+    // A print surface is oversampled (several device pixels per screen pixel),
+    // so those sizes are multiplied by `uiScale` or the paper comes out with an
+    // axis and figures half the size the screen shows. 1 = screen; print() sets
+    // it to its own oversampling ratio.
+    this.uiScale = 1;
+    this.BorderBottom = 15 * this.uiScale;
     this.mouseMode = 'None';
     this.editingMark = -1;
     this.displayMorpho = true;        // baseline + accel/decel zones toggle
@@ -306,6 +398,11 @@ class GraphPlot {
     this.interpMaxGap = 4 * 30; // bridge gaps up to 30 s by default
     this.channels = null;       // explicit list of channels to display, else auto
     this.tzOffset = 0;          // time-axis offset in seconds (0 = UTC; epoch 0 -> 00:00)
+    this.timeZone = null;       // IANA zone name (DST-aware) for the time axis; overrides tzOffset when set
+    // Per-sensor estimation delays in seconds ({doppler, scalp, mecg, mhrToco,
+    // mhrOximeter, toco}) applied at display time; null = draw the raw samples.
+    this.delays = null;
+    this._shiftCache = new Map();
 
     this.bufferCanvas = document.createElement('canvas');
     this.bufferContext = this.bufferCanvas.getContext('2d');
@@ -318,11 +415,20 @@ class GraphPlot {
       this.eventTextEdit.style.height = '0px';
       this.eventTextEdit.style.height = `${this.eventTextEdit.scrollHeight}px`;
     });
+    // Enter validates the marker text, Escape cancels, leaving the field validates.
+    this.eventTextEdit.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); this.validateMark(false); }
+      else if (e.key === 'Escape') { e.preventDefault(); this.cancelMark(); }
+    });
+    this.eventTextEdit.addEventListener('blur', () => { if (this.editingMark !== -1) this.validateMark(false); });
     this.svg.addEventListener('mousemove', (e) => this.mouseMove(e), true);
+    // The reference cursor follows the pointer: it leaves the graph with it.
+    this.svg.addEventListener('mouseleave', () => this.clearBox1515());
   }
 
   /* --- geometry ----------------------------------------------------------- */
   resize() {
+    this.BorderBottom = 15 * this.uiScale;   // the time-axis band is a screen-pixel size
     const h = this.container.clientHeight;
     const w = this.container.clientWidth;
     this.canvas.height = h;
@@ -365,8 +471,82 @@ class GraphPlot {
     return list
       .filter(([name]) => visible[name] !== false)
       .map(([name, arr]) => ({
-        name, arr, color: DEFAULT_COLORS[name] || '#000', light: LIGHT_COLORS[name],
+        name, arr: this._displayArray(name, arr), color: DEFAULT_COLORS[name] || '#000', light: LIGHT_COLORS[name],
       }));
+  }
+
+  /* --- per-sensor estimation delays (display-time compensation) ----------- */
+  /** Samples to move a channel earlier for a delay in seconds (null / unknown = 0). */
+  _shiftSamples(seconds) {
+    return typeof seconds === 'number' && Number.isFinite(seconds) && seconds > 0
+      ? Math.round(seconds * this.signals.srate) : 0;
+  }
+
+  /**
+   * Maternal-heart-rate sensor when it is not the Toco transducer: the Q byte
+   * only says "Toco or not", so the acquisition's sensor-change markers of
+   * that channel (`£Purple=…` / `£Violet=…`) decide between maternal ECG and
+   * pulse oximetry; without one, oximetry (the usual Philips case).
+   */
+  _mhrSensorSteps() {
+    const steps = [];
+    for (const m of this.signals.Marks || []) {
+      if (!m || !/^£(Violet|Purple)=/.test(m[1])) continue;
+      steps.push([m[0], /ECG/i.test(m[1]) ? 'mecg' : /TOCO/i.test(m[1]) ? 'mhrToco' : 'mhrOximeter']);
+    }
+    return steps.sort((a, b) => a[0] - b[0]);
+  }
+
+  /**
+   * The array actually drawn for a channel: each sample moved EARLIER by the
+   * delay of its own sensor mode (Q byte of that sample) — FHR by `doppler`
+   * or `scalp` (isECG1 / isECG2 bits), MHR by `mhrToco` (isTOCOMHR bit),
+   * `mecg` or `mhrOximeter`, TOCO by `toco`. Without delays, the raw array.
+   * The tail left empty by the shift is "no signal" (0 for a heart rate, NaN
+   * for the TOCO), which is why the right edge of a delayed channel sits back
+   * in real time. Symmetrically, where a channel's delay DROPS going forward
+   * (SpO2 12.5 s to a Toco pulse 6 s), its samples jump forward and leave a gap
+   * of the difference at the sensor change: that blank is real, it is the span
+   * no sensor ever estimated. A blank heart-rate sample never erases a real one that
+   * another mode placed at a sensor change. Cached per channel until the
+   * data, the marks or the delays change. The file itself is never modified.
+   */
+  _displayArray(name, arr) {
+    const d = this.delays;
+    if (!d || !arr || !arr.length) return arr;
+    if (name !== 'FHR1' && name !== 'FHR2' && name !== 'MHR' && name !== 'TOCO') return arr;
+    const sh = {
+      doppler: this._shiftSamples(d.doppler), scalp: this._shiftSamples(d.scalp), mecg: this._shiftSamples(d.mecg),
+      mhrToco: this._shiftSamples(d.mhrToco), mhrOximeter: this._shiftSamples(d.mhrOximeter), toco: this._shiftSamples(d.toco),
+    };
+    const own = name === 'TOCO' ? [sh.toco] : name === 'MHR' ? [sh.mhrToco, sh.mecg, sh.mhrOximeter] : [sh.doppler, sh.scalp];
+    if (!own.some((x) => x > 0)) return arr;
+    const s = this.signals;
+    const key = `${arr.length}|${sh.doppler},${sh.scalp},${sh.mecg},${sh.mhrToco},${sh.mhrOximeter},${sh.toco}|${s.marksVersion}`;
+    const cached = this._shiftCache.get(name);
+    if (cached && cached.key === key && cached.src === arr) return cached.out;
+    const Q = s.Q || [];
+    const steps = name === 'MHR' ? this._mhrSensorSteps() : [];
+    const isToco = name === 'TOCO';
+    const out = new Array(arr.length).fill(isToco ? NaN : 0);
+    let step = 0, other = 'mhrOximeter';
+    for (let i = 0; i < arr.length; i++) {
+      const q = Q[i] | 0;
+      let k;
+      if (name === 'FHR1') k = (q & 0x02) ? sh.scalp : sh.doppler;
+      else if (name === 'FHR2') k = (q & 0x08) ? sh.scalp : sh.doppler;
+      else if (name === 'MHR') {
+        while (step < steps.length && steps[step][0] <= i) { other = steps[step][1]; step++; }
+        k = (q & 0x20) ? sh.mhrToco : sh[other === 'mhrToco' ? 'mhrOximeter' : other];
+      } else k = sh.toco;
+      const j = i - k;
+      if (j < 0) continue;
+      const v = arr[i];
+      if (!isToco && !(v > 0) && out[j] > 0) continue;
+      out[j] = v;
+    }
+    this._shiftCache.set(name, { key, src: arr, out });
+    return out;
   }
 
   /** Per-sample boolean mask of false-signal (URS/NTA) regions, from the marks. */
@@ -409,6 +589,7 @@ class GraphPlot {
   /* --- drawing primitives ------------------------------------------------- */
   hline(x1, x2, y, w, color) {
     this.ctx.beginPath();
+    w *= this.uiScale;
     const r = 0.5 * w;
     this.ctx.moveTo(Math.round(x1), Math.round(y - r) + r);
     this.ctx.lineTo(Math.round(x2), Math.round(y - r) + r);
@@ -419,6 +600,7 @@ class GraphPlot {
 
   vline(x, y1, y2, w, color) {
     this.ctx.beginPath();
+    w *= this.uiScale;
     const r = 0.5 * w;
     this.ctx.moveTo(Math.round(x - r) + r, Math.round(y1));
     this.ctx.lineTo(Math.round(x - r) + r, Math.round(y2));
@@ -430,20 +612,20 @@ class GraphPlot {
   drawAxes() {
     const ctx = this.ctx;
     ctx.clearRect(0, 0, this.TotalWidth, this.TotalHeight);
-    // light-green CTG paper background
-    ctx.fillStyle = '#EEFFEE';
+    // pure white paper, on screen and in print alike
+    ctx.fillStyle = PAPER_COLOR;
     ctx.fillRect(0, 0, this.TotalWidth, this.TotalHeight);
 
-    ctx.font = '18px Arial';
+    ctx.font = `${18 * this.uiScale}px Arial`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    const textheight = 22;
+    const textheight = 22 * this.uiScale;
 
     // central "safe"/normal FHR band (default 110..160 bpm, configurable)
     const span = this.signals.maxRCF - this.signals.minRCF;
     const yA = this.BorderTop + ((this.signals.maxRCF - this.signals.safeMax) / span) * this.RCFHeight;
     const yB = this.BorderTop + ((this.signals.maxRCF - this.signals.safeMin) / span) * this.RCFHeight;
-    ctx.fillStyle = '#F0F0F0';
+    ctx.fillStyle = SAFE_BAND_COLOR;
     ctx.fillRect(this.BorderLeft, yA, this.graphWidth, yB - yA);
 
     // vertical time lines
@@ -476,19 +658,26 @@ class GraphPlot {
       else if (j % 2 === 0) this.hline(this.BorderLeft, this.BorderLeft + this.graphWidth, ty, 1, GRID_COLOR);
     }
 
-    // FHR numeric labels (every 4th line). Safe-band labels sit on a grey chip.
+    // FHR numeric labels (every 4th line) on a chip that hides the grid lines
+    // behind the digits. The chip takes the colour of what it covers — white
+    // paper, grey inside the safe band — so a label sitting on a band edge
+    // (160 by default) is white above the edge and grey below it.
     for (let j = 2; j <= nLines; j += 4) {
       const ty = this.BorderTop + (j * 5 * this.RCFHeight) / span;
       if (this.fullGrid || j % 8 === 2) {
         const val = this.signals.maxRCF - 5 * j;
-        const inSafe = val >= this.signals.safeMin && val <= this.signals.safeMax;
         for (let i = 600 - (this.time % 600); i < this.winlength; i += 600) {
           const text = val.toString();
-          const textwidth = ctx.measureText(text).width + 4;
+          const textwidth = ctx.measureText(text).width + 4 * this.uiScale;
           const textx = this.BorderLeft + (i / this.winlength) * this.graphWidth - textwidth / 2;
           const texty = ty - textheight / 2;
-          ctx.fillStyle = inSafe ? '#F0F0F0' : '#FFFFFF';
+          ctx.fillStyle = PAPER_COLOR;
           ctx.fillRect(textx, texty, textwidth, textheight);
+          const chipTop = Math.max(texty, yA), chipBottom = Math.min(texty + textheight, yB);
+          if (chipBottom > chipTop) {
+            ctx.fillStyle = SAFE_BAND_COLOR;
+            ctx.fillRect(textx, chipTop, textwidth, chipBottom - chipTop);
+          }
           ctx.fillStyle = GRID_COLOR;
           ctx.fillText(text, textx + textwidth / 2, texty + textheight / 2);
         }
@@ -510,10 +699,10 @@ class GraphPlot {
       if (this.fullGrid || j % 4 === 0) {
         for (let i = 600 - (this.time % 600); i < this.winlength; i += 600) {
           const text = (100 - 10 * j).toString();
-          const textwidth = ctx.measureText(text).width + 4;
+          const textwidth = ctx.measureText(text).width + 4 * this.uiScale;
           const textx = this.BorderLeft + (i / this.winlength) * this.graphWidth - textwidth / 2;
           const texty = ty - textheight / 2;
-          ctx.fillStyle = '#FFFFFF';
+          ctx.fillStyle = PAPER_COLOR;
           ctx.fillRect(textx, texty, textwidth, textheight);
           ctx.fillStyle = GRID_COLOR;
           ctx.fillText(text, textx + textwidth / 2, texty + textheight / 2);
@@ -522,21 +711,39 @@ class GraphPlot {
     }
 
     // time-tick labels along the bottom (HHhMM)
-    ctx.font = '14px Arial';
+    ctx.font = `${14 * this.uiScale}px Arial`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
     ctx.fillStyle = '#000000';
     const t = new Date();
     const secGap = 600 / (1 + this.is3cm);
     const tz = this.tzOffset || 0; // seconds; 0 = UTC so an epoch-0 (anonymised) start reads 00:00
+    const zoned = this._axisFormatter(); // null unless an IANA `timeZone` is set
     for (let i = 0; i < this.winlength / secGap; i++) {
       const textx = this.BorderLeft + ((secGap - (this.time % secGap) + i * secGap) / this.winlength) * this.graphWidth;
       const texty = this.TotalHeight - this.BorderBottom;
-      t.setTime(((Math.floor(this.time / secGap + 1) + i) * secGap + tz) * 1000);
-      const text = ('00' + t.getUTCHours()).slice(-2) + 'h' + ('00' + t.getUTCMinutes()).slice(-2);
+      t.setTime(((Math.floor(this.time / secGap + 1) + i) * secGap + (zoned ? 0 : tz)) * 1000);
+      const text = zoned ? zoned(t) : ('00' + t.getUTCHours()).slice(-2) + 'h' + ('00' + t.getUTCMinutes()).slice(-2);
       ctx.fillText(text, textx, texty);
     }
     this.hline(this.BorderLeft, this.TotalWidth - this.BorderRight, this.TotalHeight - this.BorderBottom, 1, '#000000');
+  }
+
+  /**
+   * `HHhMM` in the IANA `timeZone` (daylight-saving time included), or null
+   * when no zone is set — the fixed `tzOffset` then applies. An unknown zone
+   * name falls back to the offset rather than throwing in the middle of a redraw.
+   */
+  _axisFormatter() {
+    if (!this.timeZone) return null;
+    if (this._axisZone !== this.timeZone) {
+      try {
+        this._axisFmt = new Intl.DateTimeFormat('en-GB', { timeZone: this.timeZone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+        this._axisZone = this.timeZone;
+      } catch (e) { this.timeZone = null; return null; }
+    }
+    const fmt = this._axisFmt;
+    return (d) => fmt.format(d).replace(':', 'h');
   }
 
   /* --- colored zones (periods) ------------------------------------------- */
@@ -621,7 +828,7 @@ class GraphPlot {
       // Only the analysed fetal channel carries the false-signal mask (NOT the
       // maternal MHR, which is the reference, nor the computed FHRi/baseline).
       const canFalse = ch.name === this.falseSignalChannel;
-      this.ctx.lineWidth = 1;
+      this.ctx.lineWidth = this.uiScale;
       let started = false, curColor = null, lastX = 0, lastY = 0, haveLast = false;
       const flush = () => { if (started) { this.ctx.stroke(); started = false; } };
       for (let k = 0; k <= this.winlength * s.srate; k += 4) {
@@ -657,9 +864,10 @@ class GraphPlot {
       let y0 = NaN;
       this.ctx.beginPath();
       this.ctx.strokeStyle = DEFAULT_COLORS.TOCO;
+      const toco = this._displayArray('TOCO', s.TOCO);
       for (let k = 0; k <= this.winlength * s.srate; k += 4) {
         const x1 = this.BorderLeft + (k * this.graphWidth) / (s.srate * this.winlength);
-        const v = s.TOCO[d + k];
+        const v = toco[d + k];
         if (!Number.isNaN(v) && v !== undefined) {
           const y1 = this.BorderTop + this.RCFHeight + this.RCFTOCOSpace
             + (this.TOCOHeight * (s.maxTOCO - v)) / (s.maxTOCO - s.minTOCO);
@@ -680,25 +888,29 @@ class GraphPlot {
     const s = this.signals;
     this.markRects = [];
     if (!this.displayMarks) return;   // marker show/hide toggle
-    const all = [{ x: this.graphWidth - 200, y: this.BorderTop, w: 200, h: 21 }];
-    this.ctx.font = '16px Arial';
+    const u = this.uiScale;                  // marker text is written in screen pixels too
+    const all = [{ x: this.graphWidth - 200 * u, y: this.BorderTop, w: 200 * u, h: 21 * u }];
+    this.ctx.font = `${16 * u}px Arial`;
     this.ctx.textAlign = 'left';
     this.ctx.textBaseline = 'top';
     if (!s.Marks) return;
     for (let i = 0; i < s.Marks.length; i++) {
       const m = s.Marks[i];
-      if (!m || m[1][0] === '$') continue;
+      // `$` zones are painted by drawPeriods; `§` lines are protected metadata
+      // (device model, serial number…) and are never drawn.
+      if (!m || m[1][0] === '$' || m[1][0] === '§') continue;
       const tmpx0 = m[0] / s.srate - (this.time - s.start);
       const tmpx = this.BorderLeft + (tmpx0 / this.winlength) * this.graphWidth;
-      const color = m[1][0] === '£' ? '#0000FF' : '#FFBB00';
+      // `£!` = protected alert (device failure), red; `£` = protected, blue; else a free event.
+      const color = m[1].startsWith('£!') ? ALERT_MARK_COLOR : m[1][0] === '£' ? PROTECTED_MARK_COLOR : MARK_COLOR;
       this.ctx.fillStyle = color;
-      const dtext = m[1].replace('£', '');
+      const dtext = m[1].replace(/^£!?/, '');
       const texts = dtext.split('\r');
       for (let k = 0; k < texts.length; k++) {
         let j = 0;
-        const rect = { x: tmpx + 3, y: this.BorderTop, w: this.ctx.measureText(texts[k]).width, h: 17 };
+        const rect = { x: tmpx + 3 * u, y: this.BorderTop, w: this.ctx.measureText(texts[k]).width, h: 17 * u };
         while (j < all.length) {
-          if (this.intersectRect(rect, all[j])) { rect.y += 5; j = 0; } else j++;
+          if (this.intersectRect(rect, all[j])) { rect.y += 5 * u; j = 0; } else j++;
         }
         all.push(rect);
         if (k === 0) {
@@ -706,7 +918,7 @@ class GraphPlot {
           this.markRects.push(rect);
         }
         if (i !== this.editingMark && tmpx0 > 0 && tmpx0 < this.winlength) {
-          this.ctx.fillText(texts[k], tmpx + 3, rect.y);
+          this.ctx.fillText(texts[k], tmpx + 3 * u, rect.y);
         }
       }
     }
@@ -783,7 +995,7 @@ class GraphPlot {
 
   initializeNewMark(defaultText) {
     this.clearBox1515();
-    const color = (defaultText === 'Question' || (defaultText.length > 0 && defaultText[0] === '£')) ? '#0000FF' : '#FFBB00';
+    const color = (defaultText === 'Question' || (defaultText.length > 0 && defaultText[0] === '£')) ? PROTECTED_MARK_COLOR : MARK_COLOR;
     this.newMark.textEvent = this._svgText(0, this.BorderTop + 17);
     this.newMark.textEvent.setAttributeNS(null, 'fill', color);
     this.newMark.textEvent.textContent = defaultText;
@@ -806,6 +1018,7 @@ class GraphPlot {
     } else {
       this.editingMark = s.addMarks(samp, text);
       s.editingMark = true;
+      this._editingOriginal = text;   // what Escape restores ('' = the new mark goes away)
       this.redraw();
       let tmpx = s.Marks[this.editingMark][0] / s.srate - (this.time - s.start);
       tmpx = this.BorderLeft + (tmpx / this.winlength) * this.graphWidth;
@@ -820,13 +1033,30 @@ class GraphPlot {
 
   validateMark(shifted = false) {
     const s = this.signals;
-    s.updateMark(this.editingMark, this.eventTextEdit.value);
-    this.eventTextEdit.style.display = 'none';
+    if (this.editingMark === -1) return;   // a blur after a validation must not touch the marks
+    // The edit is closed BEFORE the field is hidden: the blur fired by the hiding must not re-enter.
+    const n = this.editingMark;
     this.editingMark = -1;
     s.editingMark = false;
+    // A line break typed in the field becomes the format's internal `\r`
+    // (display line break): `\n` is the line separator of the marker file.
+    s.updateMark(n, this.eventTextEdit.value.replace(/\r?\n/g, '\r'));
+    this.eventTextEdit.style.display = 'none';
     this.redraw();
     this.viewer._markersChanged();
     if (shifted) setTimeout(() => this.initializeNewMark(this.eventTextEdit.value), 0);
+  }
+
+  /** Escape: the text goes back to what it was; a mark just created is removed. Nothing is emitted. */
+  cancelMark() {
+    const s = this.signals;
+    if (this.editingMark === -1) return;
+    const n = this.editingMark;
+    this.editingMark = -1;
+    s.editingMark = false;
+    s.updateMark(n, this._editingOriginal || '');
+    this.eventTextEdit.style.display = 'none';
+    this.redraw();
   }
 
   checkEditable(x, y) {
@@ -835,10 +1065,12 @@ class GraphPlot {
       const r = this.markRects[i];
       if (x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) {
         let n = -1;
-        for (let j = 0; j <= i; j++) { n++; while (s.Marks[n][1][0] === '$') n++; }
+        // markRects only lists the drawn marks: skip the `$` zones and the hidden `§` metadata.
+        for (let j = 0; j <= i; j++) { n++; while (s.Marks[n][1][0] === '$' || s.Marks[n][1][0] === '§') n++; }
         if (s.Marks[n][1][0] !== '£') {
           this.editingMark = n;
           s.editingMark = true;
+          this._editingOriginal = s.Marks[n][1];
           this.redraw();
           this.eventTextEdit.style.left = `${r.x + 2}px`;
           this.eventTextEdit.style.top = `${r.y + 2}px`;
@@ -963,6 +1195,9 @@ const ICONS = {
   print: '<svg viewBox="0 0 24 24" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.5">'
     + '<path d="M7 9 V3 h10 v6"/><path d="M7 16 H5 a1 1 0 0 1-1-1 V11 a1 1 0 0 1 1-1 h14 a1 1 0 0 1 1 1 v4 a1 1 0 0 1-1 1 h-2"/>'
     + '<rect x="7" y="14" width="10" height="6.5" rx="0.5"/></g><circle cx="17.2" cy="11.8" r="1" fill="currentColor"/></svg>',
+  // Follow live: an arrow running into the end bar ("go to the live edge and stay there").
+  follow: '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">'
+    + '<path d="M3.5 12 H15"/><path d="M10.5 6.5 L16 12 L10.5 17.5"/><path d="M20.5 5 V19"/></svg>',
 };
 
 // [name, label/icon-key, tooltip, isIcon]
@@ -987,6 +1222,13 @@ export class FHRViewer {
    * @param {Object} [opts]
    *   height, scale (cm/min: 1 or 3), channels (array of channel names),
    *   signalsPerGraph (number), interpolate (bool), zones (bool),
+   *   contractions (bool), falseSignals (bool), range ([min, max] bpm),
+   *   safeZone ([min, max] bpm), tzOffset (seconds) or timeZone (IANA name),
+   *   labels ({name: tooltip, 'name.text': caption} to translate the toolbar),
+   *   delays ({doppler, scalp, mecg, mhrToco, mhrOximeter, toco} seconds),
+   *   follow (bool: keep the view locked on the live end of the recording),
+   *   bytesPerSample (6 | 8 | 12; else implied by the extension),
+   *   headerBytes (4 | 8; else auto-detected),
    *   onMessage (function for the postMessage bridge fallback).
    */
   constructor(host, opts = {}) {
@@ -998,7 +1240,7 @@ export class FHRViewer {
 
     this._buildDOM();
     this.graph = new GraphPlot(this.graphEl, this);
-    this.scrollBar = new ScrollBar(this.scrollEl, (v, fast) => this._onScroll(v, fast));
+    this.scrollBar = new ScrollBar(this.scrollTrack, (v, fast) => this._onScroll(v, fast, true));
 
     // apply options
     if (Array.isArray(opts.channels)) this.graph.channels = opts.channels.slice();
@@ -1006,6 +1248,7 @@ export class FHRViewer {
       this.graph.channels = ['FHRi', 'FHR1', 'FHR2', 'MHR'].slice(0, opts.signalsPerGraph);
     }
     if (typeof opts.tzOffset === 'number') this.graph.tzOffset = opts.tzOffset;
+    if (typeof opts.timeZone === 'string' && opts.timeZone) this.graph.timeZone = opts.timeZone;
     if (typeof opts.falseSignalChannel === 'string') this.graph.falseSignalChannel = opts.falseSignalChannel;
     if (opts.scale === 3) this.graph.is3cm = 1;
     if (opts.interpolate) this.graph.interpolate = true;
@@ -1020,6 +1263,12 @@ export class FHRViewer {
       this.graph.signals.safeMin = Number(opts.safeZone[0]);
       this.graph.signals.safeMax = Number(opts.safeZone[1]);
     }
+    if (opts.delays && typeof opts.delays === 'object') this.graph.delays = { ...opts.delays };
+    const layout = this.graph.signals.layout;
+    if ([6, 8, 12].includes(opts.bytesPerSample)) layout.bytesPerSample = opts.bytesPerSample;
+    if (opts.headerBytes === 4 || opts.headerBytes === 8) layout.headerBytes = opts.headerBytes;
+    this._follow = !!opts.follow;
+    this._btn.follow.classList.toggle('active', this._follow);
 
     this._wireEvents();
 
@@ -1028,6 +1277,7 @@ export class FHRViewer {
     // responsive width
     if (typeof ResizeObserver !== 'undefined') {
       this._ro = new ResizeObserver(() => {
+        this._snapToLiveEnd();
         if (this.graph.signals.start >= 0) this.graph.redraw();
         this._updateScrollBar();
       });
@@ -1051,29 +1301,47 @@ export class FHRViewer {
     const controllers = document.createElement('div');
     controllers.className = 'controllers';
 
-    // Scrollbar gets its own full-width row, on top...
+    // `opts.labels` lets the host translate the toolbar: {name: 'tooltip'}
+    // overrides a tooltip, {'name.text': 'caption'} the caption of a text
+    // button, `resizebar` the tooltip of the drag handle.
+    const L = this.opts.labels || {};
+
+    // Scrollbar gets its own full-width row, on top: the track, then the
+    // "follow live" control at its right end...
     this.scrollEl = document.createElement('div');
     this.scrollEl.className = 'fhr-viewer-scrollbar';
+    this.scrollTrack = document.createElement('div');
+    this.scrollTrack.className = 'scrollbarTrack';
+    const follow = document.createElement('button');
+    follow.type = 'button';
+    follow.className = 'btn-fhr-icons btn-follow icon';
+    follow.title = L.follow || 'Follow live: keep the view on the end of the recording as it grows (click again to release)';
+    follow.innerHTML = ICONS.follow;
+    this.scrollEl.append(this.scrollTrack, follow);
+    this._btn = { follow };
 
     // ...and the icon buttons sit on the row below it (no overlap).
     const icons = document.createElement('div');
     icons.className = 'controller-icons';
-    this._btn = {};
     for (const [name, label, title, isIcon] of BUTTONS) {
       const b = document.createElement('button');
       b.type = 'button';
       b.className = `btn-fhr-icons btn-${name}` + (isIcon ? ' icon' : ' text');
-      b.title = title;        // native tooltip on hover for every button
-      b.innerHTML = isIcon ? (ICONS[label] || '') : label;
+      b.title = L[name] || title;        // native tooltip on hover for every button
+      b.innerHTML = isIcon ? (ICONS[label] || '') : (L[name + '.text'] || label);
       icons.appendChild(b);
       this._btn[name] = b;
     }
     controllers.append(this.scrollEl, icons);
+    // The MHR toggle wears the colour of the MHR curve and a "−" / "+" prefix
+    // that says what the next click does (hide / show).
+    this._btn.mhr.style.color = DEFAULT_COLORS.MHR;
+    this._mhrCaption = L['mhr.text'] || 'MHR';
 
     // bottom drag handle to resize the viewer height (re-added; syncs the iframe)
     this.resizebar = document.createElement('div');
     this.resizebar.className = 'resizebar';
-    this.resizebar.title = 'Drag to resize the viewer height';
+    this.resizebar.title = L.resizebar || 'Drag to resize the viewer height';
 
     this.host.append(this.graphEl, controllers, this.resizebar);
 
@@ -1084,7 +1352,13 @@ export class FHRViewer {
     if (this.opts.scale === 3) this._btn.scale.classList.add('active');
     if (this.opts.interpolate) this._btn.interpolate.classList.add('active');
     this._btn.markers.classList.add('active');
-    this._btn.mhr.classList.add('active');
+    this._renderMhrButton();
+  }
+
+  _renderMhrButton() {
+    const on = this.channelVisible.MHR !== false;
+    this._btn.mhr.classList.toggle('active', on);
+    this._btn.mhr.innerHTML = (on ? '− ' : '+ ') + this._mhrCaption;
   }
 
   _wireEvents() {
@@ -1100,6 +1374,7 @@ export class FHRViewer {
     this._btn.mhr.addEventListener('click', () => { this.setChannelVisible('MHR', this.channelVisible.MHR === false); this._emit('button:mhr', { on: this.channelVisible.MHR }); });
     this._btn.interpolate.addEventListener('click', () => { this.setInterpolate(!this.graph.interpolate); this._emit('button:interpolate', { on: this.graph.interpolate }); });
     this._btn.print.addEventListener('click', () => { this.print(); this._emit('button:print', {}); });
+    this._btn.follow.addEventListener('click', () => { this.setFollow(!this._follow); this._emit('button:follow', { on: this._follow }); });
 
     // bottom resize handle
     this.resizebar.addEventListener('mousedown', (e) => this._resizeDown(e));
@@ -1135,17 +1410,19 @@ export class FHRViewer {
     g.time = t;
     g.redraw();
     this._updateScrollBar();
+    this._afterUserScroll();
     this._emit('scroll', { time: g.time });
     this._wheelRAF = (typeof requestAnimationFrame !== 'undefined')
       ? requestAnimationFrame(() => this._wheelStep()) : null;
   }
 
   /* --- scroll / paging ---------------------------------------------------- */
-  _onScroll(v, fast) {
+  _onScroll(v, fast, byUser = false) {
     const g = this.graph, s = g.signals;
     const sigLength = s.lastTime - s.start;
     g.time = Math.max(v * (sigLength - g.winlength + 120), 0) + s.start;
     g.redraw();
+    if (byUser) this._afterUserScroll();
     this._emit('scroll', { time: g.time, value: v });
   }
 
@@ -1156,6 +1433,37 @@ export class FHRViewer {
     this.scrollBar.setValue((g.time - s.start) / (s.lastTime - s.start - g.winlength + 120), false);
   }
 
+  /* --- follow live: keep the view locked on the end of the recording ------- */
+  /** Time of the rightmost view: the last sample plus the 2-minute blank tail the viewer always allows. */
+  _liveEnd() {
+    const g = this.graph, s = g.signals;
+    if (s.start < 0) return 0;
+    return Math.max(s.start, s.lastTime - (g.winlength || 0) + 120);
+  }
+
+  /** While following, a change of geometry (height, width, paper speed) keeps the live end in view. */
+  _snapToLiveEnd() {
+    const g = this.graph;
+    if (!this._follow || g.signals.start < 0) return;
+    g.resize();
+    g.time = this._liveEnd();
+  }
+
+  /** After a navigation by the user: following stays on only while the view sits at the live end. */
+  _afterUserScroll() {
+    const g = this.graph, s = g.signals;
+    if (s.start < 0) return;
+    const atEnd = g.time >= this._liveEnd() - 0.5;
+    // A recording shorter than the window is always "at the live end": paging it
+    // must not ARM following by itself — only an explicit setFollow() may.
+    const fits = s.lastTime - s.start + 120 <= g.winlength;
+    const on = atEnd && (this._follow || !fits);
+    if (on === this._follow) return;
+    this._follow = on;
+    this._btn.follow.classList.toggle('active', on);
+    this._emit('followChange', { on });
+  }
+
   nextpage() {
     const g = this.graph, s = g.signals;
     let t = g.time + g.winlength - 60;
@@ -1164,6 +1472,7 @@ export class FHRViewer {
     g.time = Math.max(t, s.start);
     g.redraw();
     this._updateScrollBar();
+    this._afterUserScroll();
     this._emit('scroll', { time: g.time });
   }
 
@@ -1174,6 +1483,7 @@ export class FHRViewer {
     g.time = t;
     g.redraw();
     this._updateScrollBar();
+    this._afterUserScroll();
     this._emit('scroll', { time: g.time });
   }
 
@@ -1271,6 +1581,7 @@ export class FHRViewer {
     this._panLast = { x: e.clientX, t: now };
     g.redraw();
     this._updateScrollBar();
+    this._afterUserScroll();
     this._emit('scroll', { time: g.time });
   }
 
@@ -1292,6 +1603,7 @@ export class FHRViewer {
       if (g.time < s.start) { g.time = s.start; this._panVel = 0; }
       g.redraw();
       this._updateScrollBar();
+      this._afterUserScroll();
       this._emit('scroll', { time: g.time });
       this._panVel *= Math.pow(0.95, dt / 16);   // momentum decay
       if (Math.abs(this._panVel) > 0.003) this._flingRAF = requestAnimationFrame(step);
@@ -1303,16 +1615,26 @@ export class FHRViewer {
   /* ====================================================================== *
    *  PUBLIC API
    * ====================================================================== */
-  loadBuffer(arrayBuffer, ext = 'rcfm') {
+  /**
+   * Load a recording. `ext` implies the bytes per sample; `layout`
+   * ({bytesPerSample, headerBytes}) overrides it and the constructor options
+   * for this buffer only. While following (`opts.follow` / `setFollow`), the
+   * view moves to the new live end.
+   */
+  loadBuffer(arrayBuffer, ext = 'rcfm', layout = {}) {
     this._buffer = arrayBuffer;             // keep for download
     this._ext = (ext || 'rcfm').replace('.', '');
-    this.graph.signals.loadBuffer(arrayBuffer, ext);
+    this.graph.signals.loadBuffer(arrayBuffer, ext, layout);
     if (this.graph.time === 0 || this.graph.time < this.graph.signals.start) {
       this.graph.time = this.graph.signals.start;
     }
+    this.graph.resize();                    // winlength, needed by the live end
+    const moved = this._follow && this.graph.time !== this._liveEnd();
+    if (this._follow) this.graph.time = this._liveEnd();
     this.graph.redraw();
     this._updateScrollBar();
     this._updateButtonVisibility();
+    if (moved) this._emit('scroll', { time: this.graph.time, source: 'follow' });
     return this;
   }
 
@@ -1325,7 +1647,7 @@ export class FHRViewer {
     const s = this.graph.signals;
     const marks = s.Marks || [];
     const hasType = (t) => marks.some((m) => m && m[1] && m[1][0] === '$' && m[1].substring(2, 5) === t);
-    const hasText = marks.some((m) => m && m[1] && m[1][0] !== '$');
+    const hasText = marks.some((m) => m && m[1] && m[1][0] !== '$' && m[1][0] !== '§'); // `§` is never drawn
     const hasBaseline = (s.baselineRCF && s.baselineRCF.length > 0) || hasType('ACC') || hasType('DEC');
     const show = (name, on) => { if (this._btn[name]) this._btn[name].style.display = on ? '' : 'none'; };
     show('baseline', hasBaseline);
@@ -1359,20 +1681,88 @@ export class FHRViewer {
   }
 
   /**
-   * Build a multi-page A4-landscape **PDF** of the whole recording and download
-   * it. Geometry: 1 cm/min horizontally and 20 bpm/cm vertically (a 12.63 cm
-   * graph area gives 20 bpm/cm for the default 50–210 range); consecutive pages
-   * overlap by ~2 min so nothing falls on a seam. The PDF is assembled in-page
-   * (one JPEG strip per page) and saved via a Blob download, so it works even
-   * inside a notebook iframe where window.open()/print() is blocked.
+   * The vertical geometry of the printed strip, in centimetres, derived from
+   * the very ratios `GraphPlot.resize()` uses (a 5 % gap, one third of TOCO,
+   * two thirds of FHR) rather than assumed a second time. A host that prints
+   * the scales in its own header block can then announce what a ruler measures
+   * on the paper.
+   *
+   * The paper speed comes back with them and is NOT independent of the vertical
+   * scale: `resize()` derives the time window from it
+   * (`winlength = graphWidth * 60 / sizeof20bpm / (1 + 2 * is3cm)`), so one
+   * centimetre carries `20 / bpmPerCm` minute at the 1 cm/min setting. An FHR
+   * range wider than the default 50–210 would push the strip off the sheet: the
+   * paper then wins, the strip is clamped to what is left between the header
+   * block and the footer, and every returned scale follows — including the
+   * speed. Better a slower page announced honestly than a cropped trace.
+   *
+   * Options: `paper` and `cmPerMin` as `print()` takes them, plus `bpmPerCm`
+   * to ask for another vertical scale (20 by default).
+   */
+  printGeometry(opts = {}) {
+    const s = this.graph.signals;
+    const axisCm = 15 / 37.8;                               // the band that carries the time axis
+    const paper = PRINT_PAPERS[opts.paper] || PRINT_PAPERS.A4;
+    // What is left of the page once the header block and the footer are served.
+    const maxGraphCm = (paper[1] - PRINT_TOP_RESERVE_PT - PRINT_FOOT_RESERVE_PT) / 28.3465 - axisCm;
+    const span = s.maxRCF - s.minRCF;
+    let bpmPerCm = opts.bpmPerCm || 20;
+    let graphHeightCm = (span / bpmPerCm) / ((2 / 3) * 0.95);   // FHR is 2/3 of the graph minus the 5 % gap
+    if (graphHeightCm > maxGraphCm) { graphHeightCm = maxGraphCm; bpmPerCm = span / (graphHeightCm * (2 / 3) * 0.95); }
+    const fhrHeightCm = (2 / 3) * 0.95 * graphHeightCm;     // 8 cm at 20 bpm/cm over 50-210
+    const tocoHeightCm = (1 / 3) * 0.95 * graphHeightCm;    // 4 cm — half the FHR band
+    const tocoRange = s.maxTOCO - s.minTOCO;                // 0-100 on the CTG grid
+    const cmPerMin = (20 / bpmPerCm) * (opts.cmPerMin === 3 ? 3 : 1);
+    return { bpmPerCm, cmPerMin, fhrHeightCm, graphHeightCm, tocoHeightCm, tocoRange, tocoPerCm: tocoRange / tocoHeightCm, stripHeightCm: graphHeightCm + axisCm };
+  }
+
+  /**
+   * Build a multi-page landscape **PDF** of the whole recording and download
+   * it. Geometry: 1 cm/min horizontally (3 with `cmPerMin: 3`) and 20 bpm/cm
+   * vertically — `printGeometry()` derives the strip's height from that scale
+   * (8 cm of FHR, 4 cm of TOCO for 0–100, i.e. 25 units/cm) instead of assuming
+   * it; consecutive pages overlap by ~2 min so nothing falls on a seam. The PDF
+   * is assembled in-page (one JPEG strip per page) and saved via a Blob
+   * download, so it works even inside a notebook iframe where
+   * window.open()/print() is blocked.
+   *
+   * Options: cmPerMin (1 | 3), paper ('A4' | 'letter' | 'legal'), header
+   * (array of lines printed above the strip on every page — a line is a string
+   * or a list of `{text, bold}` runs, so a label can be bold and its value
+   * plain — followed by "page i/n", which `pageNumbers` forces on or off),
+   * footer (one line at the bottom), logo ({jpeg, width, height, heightPt}: a
+   * rasterised masthead opening the header block), fillLastPage (keep the
+   * regular pace on the last page and fill it with an empty grid instead of
+   * sliding back over the previous page), filename, pageWidthCm,
+   * pageHeightCm, overlapMin. The printed axis follows `timeZone` and the
+   * printed channels follow `delays`, like the screen.
    */
   print(opts = {}) {
     const src = this.graph, s = src.signals;
     if (s.start < 0) return this;
-    const pxPerCm = 37.8 * 2;                       // 2x oversampling for crisp print
-    const Wcm = opts.pageWidthCm || 27;             // fill the A4-landscape width (~1 cm/min)
-    const Hcm = opts.pageHeightCm || 12.63;         // graph area -> 20 bpm/cm
+    // The file's pixel sizes are screen pixels at 96 dpi; the print surface is
+    // oversampled, and `uiScale` keeps every text, chip and line width at the
+    // size the screen shows for the same paper geometry.
+    const CSS_PX_PER_CM = 37.8, OVERSAMPLING = 2;
+    const pxPerCm = CSS_PX_PER_CM * OVERSAMPLING;
+    const paper = PRINT_PAPERS[opts.paper] || PRINT_PAPERS.A4;
+    const Wcm = opts.pageWidthCm || paper[2];       // fill the printable width (~1 cm/min)
+    // The strip is the graph area **plus** the band that carries the time axis
+    // (`BorderBottom`), so the graph itself really measures what
+    // printGeometry() announces — a hard-coded height for the whole strip
+    // shrank every vertical scale by the height of that band.
+    const geometry = this.printGeometry(opts);
+    const Hcm = opts.pageHeightCm || geometry.stripHeightCm;
     const overlapSec = (opts.overlapMin != null ? opts.overlapMin : 2) * 60;
+    // A header line is either a plain string or a list of `{text, bold}` runs.
+    const headerLines = Array.isArray(opts.header)
+      ? opts.header.map((l) => (Array.isArray(l) ? l.map((r) => ({ text: String(r.text), bold: !!r.bold })) : [{ text: String(l), bold: false }]))
+      : [];
+    const footer = opts.footer ? String(opts.footer) : '';
+    const logo = opts.logo && opts.logo.jpeg ? opts.logo : null;   // masthead image
+    // "page i/n" comes with the header block; `pageNumbers` forces it either way,
+    // so a print with no text options is the one this viewer has always made.
+    const pageNumbers = opts.pageNumbers != null ? !!opts.pageNumbers : (headerLines.length > 0 || !!footer);
 
     // Offscreen render surface that reuses the parsed signals + display state.
     const box = document.createElement('div');
@@ -1388,7 +1778,10 @@ export class FHRViewer {
     gp.interpolate = src.interpolate;
     gp.channels = src.channels;
     gp.tzOffset = src.tzOffset;
-    gp.is3cm = 0;                                    // print at 1 cm/min
+    gp.timeZone = src.timeZone;                      // printed axis in the zone of the screen
+    gp.delays = src.delays;                          // printed channels follow the display
+    gp.is3cm = opts.cmPerMin === 3 ? 1 : 0;          // 1 cm/min (default) or 3 cm/min
+    gp.uiScale = OVERSAMPLING;                       // paper reads like the screen
     gp.fullGrid = 1;
 
     gp.time = s.start;
@@ -1399,12 +1792,16 @@ export class FHRViewer {
     const nPages = Math.max(1, Math.ceil((totalSec - overlapSec) / step));
 
     const PT = 28.3465;                              // points per cm
-    const W = 842, H = 595;                          // A4 landscape (points)
+    const W = paper[0], H = paper[1];                // landscape page (points)
     const imgWpt = Wcm * PT, imgHpt = Hcm * PT;      // place the strip at its real cm size
     const jpegs = [];
     let imgW = 0, imgH = 0;
     for (let i = 0; i < nPages; i++) {
-      gp.time = Math.min(s.start + i * step, Math.max(s.start, s.lastTime - winSec));
+      // With fillLastPage the last page keeps the regular pace and is filled
+      // with an empty grid instead of sliding back over the previous page.
+      gp.time = opts.fillLastPage
+        ? s.start + i * step
+        : Math.min(s.start + i * step, Math.max(s.start, s.lastTime - winSec));
       gp.redraw();
       imgW = gp.canvas.width; imgH = gp.canvas.height;
       const b64 = gp.canvas.toDataURL('image/jpeg', 0.85).split(',')[1];
@@ -1414,7 +1811,7 @@ export class FHRViewer {
     }
     document.body.removeChild(box);
 
-    const pdf = this._buildPdf(jpegs, imgW, imgH, W, H, imgWpt, imgHpt);
+    const pdf = this._buildPdf(jpegs, imgW, imgH, W, H, imgWpt, imgHpt, { header: headerLines, footer, pageNumbers, logo });
     const url = URL.createObjectURL(new Blob([pdf], { type: 'application/pdf' }));
     const a = document.createElement('a');
     a.href = url; a.download = `${opts.filename || 'ctg'}.pdf`;
@@ -1423,8 +1820,13 @@ export class FHRViewer {
     return this;
   }
 
-  /** Assemble a minimal multi-page PDF, one full-strip DCTDecode (JPEG) per page. */
-  _buildPdf(jpegs, imgW, imgH, W, H, imgWpt, imgHpt) {
+  /**
+   * Assemble a minimal multi-page PDF, one full-strip DCTDecode (JPEG) per
+   * page, with an optional header block (real PDF text, so it stays
+   * searchable and extractable) whose lines are lists of `{text, bold}` runs
+   * and which may open with a rasterised logo, "page i/n" and a footer line.
+   */
+  _buildPdf(jpegs, imgW, imgH, W, H, imgWpt, imgHpt, text = {}) {
     const parts = [];
     let length = 0;
     const enc = (str) => {
@@ -1442,25 +1844,84 @@ export class FHRViewer {
       add('endobj\n');
     };
     const n = jpegs.length;
-    const total = 2 + 3 * n;
+    // A header line reaches here as a list of `{text, bold}` runs; a bare string
+    // is still accepted, so an older caller keeps working.
+    const header = (text.header || []).map((l) => (Array.isArray(l) ? l : [{ text: String(l), bold: false }]));
+    const footer = text.footer || '';
+    const logo = text.logo && text.logo.jpeg ? text.logo : null;
+    const logoHpt = logo ? (logo.heightPt || 22) : 0;
+    const logoWpt = logo ? logoHpt * (logo.width / logo.height) : 0;
+    const lineH = 11;
+    const headerH = (header.length ? 8 + header.length * lineH : 0) + (logo ? logoHpt + 4 : 0);
+    const pdfText = (str) => {
+      // WinAnsi: Latin-1 bytes, the 0x80-0x9F block, and PDF string delimiters
+      // escaped. That block is not Latin-1 and used to go to '?' — it carries
+      // the euro sign, the typographic quotes, the bullet, the dashes and the
+      // French ligature œ.
+      let out = '';
+      for (const ch of String(str)) {
+        const c = ch.codePointAt(0);
+        if (ch === '(' || ch === ')' || ch === '\\') out += '\\' + ch;
+        // A control character — a newline typed in a form value — is not a line
+        // break inside a PDF literal string: it would swallow the rest of the line.
+        else if (c < 0x20 || c === 0x7f) out += ' ';
+        else if (c <= 0x7e) out += ch;
+        else if (WIN_ANSI_HIGH[c] !== undefined) out += '\\' + WIN_ANSI_HIGH[c].toString(8).padStart(3, '0');
+        else if (c >= 0xa0 && c <= 0xff) out += '\\' + c.toString(8).padStart(3, '0');
+        else out += '?';
+      }
+      return out;
+    };
+    // Objects 1-5 are fixed (catalog, page tree, regular font, bold font, logo
+    // image — `null` when there is none, so the numbering never moves); each
+    // page then takes three.
+    const total = 5 + 3 * n;
     add('%PDF-1.4\n%\xE2\xE3\xCF\xD3\n');
     obj(1, '<< /Type /Catalog /Pages 2 0 R >>');
     const pageNums = [];
-    for (let i = 0; i < n; i++) pageNums.push(5 + 3 * i);
+    for (let i = 0; i < n; i++) pageNums.push(8 + 3 * i);
     obj(2, `<< /Type /Pages /Count ${n} /Kids [${pageNums.map((p) => `${p} 0 R`).join(' ')}] >>`);
-    const ty = (H - imgHpt - 20).toFixed(2);         // 20 pt top margin
+    obj(3, '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>');
+    obj(4, '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>');
+    if (logo) {
+      obj(5, {
+        dict: `<< /Type /XObject /Subtype /Image /Width ${logo.width} /Height ${logo.height} `
+          + `/ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${logo.jpeg.length} >>`,
+        stream: logo.jpeg,
+      });
+    } else obj(5, 'null');
+    // 20 pt top margin + the header block, and never below the footer line.
+    const ty = Math.max(14, H - imgHpt - 20 - headerH).toFixed(2);
     const tx = (Math.max(0, (W - imgWpt) / 2)).toFixed(2);   // centre the strip in X
     for (let i = 0; i < n; i++) {
-      const img = 3 + 3 * i, content = 4 + 3 * i, page = 5 + 3 * i;
+      const img = 6 + 3 * i, content = 7 + 3 * i, page = 8 + 3 * i;
       obj(img, {
         dict: `<< /Type /XObject /Subtype /Image /Width ${imgW} /Height ${imgH} `
           + `/ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${jpegs[i].length} >>`,
         stream: jpegs[i],
       });
-      const cs = `q ${imgWpt.toFixed(2)} 0 0 ${imgHpt.toFixed(2)} ${tx} ${ty} cm /Im Do Q`;
+      let cs = `q ${imgWpt.toFixed(2)} 0 0 ${imgHpt.toFixed(2)} ${tx} ${ty} cm /Im Do Q\n`;
+      let y = H - 20;
+      // The logo opens the header block, in place of a product name in words.
+      if (logo) {
+        cs += `q ${logoWpt.toFixed(2)} 0 0 ${logoHpt.toFixed(2)} ${tx} ${(y - logoHpt).toFixed(2)} cm /Lo Do Q\n`;
+        y -= logoHpt + 4;
+      }
+      header.forEach((line, k) => {
+        const size = k === 0 ? 10 : 9;
+        // Consecutive Tj inside one BT/ET advance on their own: a run can change
+        // font without the caller having to know Helvetica's metrics.
+        cs += `BT ${tx} ${(y - size).toFixed(2)} Td`;
+        for (const run of line) cs += ` /${run.bold ? 'F2' : 'F1'} ${size} Tf (${pdfText(run.text)}) Tj`;
+        cs += ' ET\n';
+        y -= lineH;
+      });
+      if (text.pageNumbers) cs += `BT /F1 9 Tf ${(W - 80).toFixed(2)} ${(H - 30).toFixed(2)} Td (${pdfText(`page ${i + 1}/${n}`)}) Tj ET\n`;
+      if (footer) cs += `BT /F1 7 Tf ${tx} 12 Td (${pdfText(footer)}) Tj ET\n`;
       obj(content, { dict: `<< /Length ${cs.length} >>`, stream: enc(cs) });
       obj(page, `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${W} ${H}] `
-        + `/Resources << /XObject << /Im ${img} 0 R >> >> /Contents ${content} 0 R >>`);
+        + `/Resources << /XObject << /Im ${img} 0 R${logo ? ' /Lo 5 0 R' : ''} >> `
+        + `/Font << /F1 3 0 R /F2 4 0 R >> >> /Contents ${content} 0 R >>`);
     }
     const xref = length;
     add(`xref\n0 ${total + 1}\n0000000000 65535 f \n`);
@@ -1489,6 +1950,7 @@ export class FHRViewer {
   setScale(cmPerMin) {
     this.graph.is3cm = cmPerMin === 3 ? 1 : 0;
     this._btn.scale.classList.toggle('active', !!this.graph.is3cm);
+    this._snapToLiveEnd();
     this.graph.redraw();
     this._updateScrollBar();
     this._emit('scaleChange', { cmPerMin: this.graph.is3cm ? 3 : 1, is3cm: this.graph.is3cm });
@@ -1497,11 +1959,44 @@ export class FHRViewer {
 
   toggle3cm() { return this.setScale(this.graph.is3cm ? 1 : 3); }
 
-  /** Set the time-axis timezone offset in seconds (0 = UTC). */
-  setTimezone(offsetSeconds) {
-    this.graph.tzOffset = Number(offsetSeconds) || 0;
+  /**
+   * Per-sensor estimation delays of the monitor, in seconds —
+   * {doppler, scalp, mecg, mhrToco, mhrOximeter, toco}; a null value = unknown
+   * = no shift for that sensor; `null` = no compensation (raw samples).
+   */
+  setDelays(delays) {
+    this.graph.delays = delays && typeof delays === 'object' ? { ...delays } : null;
+    this.graph._shiftCache.clear();
+    if (this.graph.signals.start >= 0) this.graph.redraw();
+    this._emit('delaysChange', { delays: this.graph.delays });
+    return this;
+  }
+
+  getDelays() { return this.graph.delays ? { ...this.graph.delays } : null; }
+
+  /** Lock the view on the live end of the recording (each `loadBuffer` keeps the end in view); `false` releases it. */
+  setFollow(on) {
+    this._follow = !!on;
+    this._btn.follow.classList.toggle('active', this._follow);
+    if (this._follow && this.graph.signals.start >= 0) {
+      this.graph.resize();
+      this.graph.time = this._liveEnd();
+      this.graph.redraw();
+      this._updateScrollBar();
+      this._emit('scroll', { time: this.graph.time, source: 'follow' });
+    }
+    this._emit('followChange', { on: this._follow });
+    return this;
+  }
+
+  getFollow() { return this._follow; }
+
+  /** Set the time-axis timezone: an offset in seconds (0 = UTC) or an IANA zone name ('Europe/Paris'). */
+  setTimezone(offsetSecondsOrZone) {
+    if (typeof offsetSecondsOrZone === 'string') this.graph.timeZone = offsetSecondsOrZone || null;
+    else { this.graph.timeZone = null; this.graph.tzOffset = Number(offsetSecondsOrZone) || 0; }
     this.graph.redraw();
-    this._emit('timezoneChange', { offsetSeconds: this.graph.tzOffset });
+    this._emit('timezoneChange', { offsetSeconds: this.graph.tzOffset, timeZone: this.graph.timeZone });
     return this;
   }
 
@@ -1514,6 +2009,7 @@ export class FHRViewer {
       const fr = window.frameElement;
       if (fr) fr.style.height = `${px + 4}px`;
     } catch (e) { /* cross-origin frame: ignore */ }
+    this._snapToLiveEnd();
     if (this.graph.signals.start >= 0) this.graph.redraw();
     this._updateScrollBar();
     this._emit('heightChange', { height: px });
@@ -1522,7 +2018,7 @@ export class FHRViewer {
 
   setChannelVisible(name, visible) {
     this.channelVisible[name] = visible;
-    if (name === 'MHR') this._btn.mhr.classList.toggle('active', visible !== false);
+    if (name === 'MHR') this._renderMhrButton();
     this.graph.redraw();
     return this;
   }
@@ -1565,7 +2061,11 @@ export class FHRViewer {
   setRange(minBpm, maxBpm) {
     this.graph.signals.minRCF = Number(minBpm);
     this.graph.signals.maxRCF = Number(maxBpm);
+    // The grid bounds set the vertical scale, and the vertical scale sets
+    // winlength: while following, the live end must stay in view.
+    this._snapToLiveEnd();
     this.graph.redraw();
+    this._updateScrollBar();
     this._emit('rangeChange', { min: this.graph.signals.minRCF, max: this.graph.signals.maxRCF });
     return this;
   }
@@ -1610,6 +2110,9 @@ export class FHRViewer {
 
   _markersChanged() { this._emit('markersChange', { markers: this.getMarkers() }); }
 }
+
+// `Signals` is exported so the decoder (header / sample layout) can be tested without a DOM.
+export { Signals };
 
 // Convenience: auto-upgrade any element with data-fhr-viewer (optional).
 export function upgradeAll(root = document) {
