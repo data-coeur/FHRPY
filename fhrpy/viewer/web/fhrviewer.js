@@ -563,8 +563,8 @@ class GraphPlot {
   drawAxes() {
     const ctx = this.ctx;
     ctx.clearRect(0, 0, this.TotalWidth, this.TotalHeight);
-    // light-green CTG paper background
-    ctx.fillStyle = '#EEFFEE';
+    // pure white paper, on screen and in print alike
+    ctx.fillStyle = PAPER_COLOR;
     ctx.fillRect(0, 0, this.TotalWidth, this.TotalHeight);
 
     ctx.font = '18px Arial';
@@ -576,7 +576,7 @@ class GraphPlot {
     const span = this.signals.maxRCF - this.signals.minRCF;
     const yA = this.BorderTop + ((this.signals.maxRCF - this.signals.safeMax) / span) * this.RCFHeight;
     const yB = this.BorderTop + ((this.signals.maxRCF - this.signals.safeMin) / span) * this.RCFHeight;
-    ctx.fillStyle = '#F0F0F0';
+    ctx.fillStyle = SAFE_BAND_COLOR;
     ctx.fillRect(this.BorderLeft, yA, this.graphWidth, yB - yA);
 
     // vertical time lines
@@ -609,19 +609,26 @@ class GraphPlot {
       else if (j % 2 === 0) this.hline(this.BorderLeft, this.BorderLeft + this.graphWidth, ty, 1, GRID_COLOR);
     }
 
-    // FHR numeric labels (every 4th line). Safe-band labels sit on a grey chip.
+    // FHR numeric labels (every 4th line) on a chip that hides the grid lines
+    // behind the digits. The chip takes the colour of what it covers — white
+    // paper, grey inside the safe band — so a label sitting on a band edge
+    // (160 by default) is white above the edge and grey below it.
     for (let j = 2; j <= nLines; j += 4) {
       const ty = this.BorderTop + (j * 5 * this.RCFHeight) / span;
       if (this.fullGrid || j % 8 === 2) {
         const val = this.signals.maxRCF - 5 * j;
-        const inSafe = val >= this.signals.safeMin && val <= this.signals.safeMax;
         for (let i = 600 - (this.time % 600); i < this.winlength; i += 600) {
           const text = val.toString();
           const textwidth = ctx.measureText(text).width + 4;
           const textx = this.BorderLeft + (i / this.winlength) * this.graphWidth - textwidth / 2;
           const texty = ty - textheight / 2;
-          ctx.fillStyle = inSafe ? '#F0F0F0' : '#FFFFFF';
+          ctx.fillStyle = PAPER_COLOR;
           ctx.fillRect(textx, texty, textwidth, textheight);
+          const chipTop = Math.max(texty, yA), chipBottom = Math.min(texty + textheight, yB);
+          if (chipBottom > chipTop) {
+            ctx.fillStyle = SAFE_BAND_COLOR;
+            ctx.fillRect(textx, chipTop, textwidth, chipBottom - chipTop);
+          }
           ctx.fillStyle = GRID_COLOR;
           ctx.fillText(text, textx + textwidth / 2, texty + textheight / 2);
         }
@@ -646,7 +653,7 @@ class GraphPlot {
           const textwidth = ctx.measureText(text).width + 4;
           const textx = this.BorderLeft + (i / this.winlength) * this.graphWidth - textwidth / 2;
           const texty = ty - textheight / 2;
-          ctx.fillStyle = '#FFFFFF';
+          ctx.fillStyle = PAPER_COLOR;
           ctx.fillRect(textx, texty, textwidth, textheight);
           ctx.fillStyle = GRID_COLOR;
           ctx.fillText(text, textx + textwidth / 2, texty + textheight / 2);
