@@ -26,7 +26,9 @@ unchanged defaults**, plus the new requests of the same issue:
 - **Marker conventions**: `£!…` drawn in red (protected alert), `§…` never drawn
   nor editable (protected metadata); both kept by `markersText()` / `save_markers()`. (#18)
 - **`print()` options**: `cmPerMin` (1 | 3), `paper` (A4 | letter | legal),
-  `header` lines and `footer` as real PDF text with `page i/n`, `fillLastPage`.
+  `header` lines and `footer` as real PDF text, `fillLastPage`. `page i/n` comes
+  with the header block and `pageNumbers` forces it either way, so a `print()`
+  with no options still produces the PDF this viewer always made.
   Python: `print(cm_per_min=…, **options)`. (#19)
 - **Marker editing**: Enter validates, Escape cancels (`cancelMark()`), leaving
   the field validates; a typed line break is stored as the format's `\r`; the
@@ -50,3 +52,14 @@ unchanged defaults**, plus the new requests of the same issue:
   (header detection in a real browser, paper and label pixels, follow control,
   MHR button, resize handle, labels).
 - `tests/test_viewer_options.py`: the Python wrapper's new options and methods.
+
+### Also
+
+- `examples/viewer_demo.html` rebuilt: it inlines the viewer, so the committed
+  demo — and `e2e/viewer.spec.ts`, which runs against it — were still exercising
+  the pre-port code. The analysed payload and markers are untouched; only the
+  inlined CSS and JS were refreshed.
+- `docs/screenshots/issue175-viewer-options.png`: one frame with the white paper,
+  the `£!` alert in red, the `£` sensor marker in blue (a `§` line loaded and
+  never drawn), the MHR toggle in its curve's colour, the follow control lit at
+  the right end of the scrollbar, and the resize handle set apart.

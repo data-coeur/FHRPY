@@ -1,7 +1,8 @@
 /*
- * Unit tests of fhrviewer.js — run with `node --test tests/js/` (Node >= 20,
- * no browser, no dependency). The DOM comes from ./dom_stub.mjs; the canvas
- * context records what is drawn so colours and geometry can be asserted.
+ * Unit tests of fhrviewer.js — `npm test` runs them: Node >= 20 globs the
+ * quoted pattern itself (`node --test 'tests/js/*.test.mjs'`), no browser and
+ * no dependency. The DOM comes from ./dom_stub.mjs; the canvas context records
+ * what is drawn so colours and geometry can be asserted.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -353,7 +354,10 @@ test('print(): cmPerMin 3 triples the pages; paper, header and footer land in th
   assert.ok(a4.text.startsWith('%PDF-'));
   assert.ok(a4.text.includes('/MediaBox [0 0 842 595]'));
   assert.ok(a4.pages >= 2, `${a4.pages} pages`);
-  assert.ok(a4.text.includes(`(page 1/${a4.pages}) Tj`));
+  // a print with no text options is the one this viewer always made: no page numbers
+  assert.ok(!a4.text.includes(') Tj'));
+  const numbered = await capture({ pageNumbers: true });
+  assert.ok(numbered.text.includes(`(page 1/${numbered.pages}) Tj`));
   const fast = await capture({ cmPerMin: 3 });
   assert.ok(fast.pages >= 2.5 * a4.pages, `${fast.pages} pages at 3 cm/min vs ${a4.pages}`);
   const letter = await capture({ paper: 'letter', header: ['Bed 3 — Jane (Doe)', 'started 12:00'], footer: 'FHRPY print' });
@@ -362,6 +366,10 @@ test('print(): cmPerMin 3 triples the pages; paper, header and footer land in th
   assert.ok(letter.text.includes('(Bed 3 \\227 Jane \\(Doe\\)) Tj'));
   assert.ok(letter.text.includes('(started 12:00) Tj'));
   assert.ok(letter.text.includes('(FHRPY print) Tj'));
+  // the header block brings "page i/n" with it, and pageNumbers can veto it
+  assert.ok(letter.text.includes(`(page 1/${letter.pages}) Tj`));
+  const quiet = await capture({ header: ['Bed 3'], pageNumbers: false });
+  assert.ok(quiet.text.includes('(Bed 3) Tj') && !quiet.text.includes('/n) Tj'));
 });
 
 /* ------------------------------------------------------------- follow live */
@@ -396,7 +404,7 @@ test('follow live: locked on the live end across loads, released by the user, re
   const t = g.time;
   v.loadBuffer(encode(seconds(10800)), 'rcfm');
   assert.equal(g.time, t);
-  // the control re-attaches (jump to the end, lit); a second click releases
+  // the control re-attaches (jump to the end, highlighted); a second click releases
   btn.click();
   assert.equal(v.getFollow(), true);
   assert.equal(g.time, end(10800));
@@ -418,6 +426,17 @@ test('follow live: locked on the live end across loads, released by the user, re
   assert.equal(g.time, end(10801));
   // off by default
   assert.equal(makeViewer().v.getFollow(), false);
+  // a recording shorter than the window is always "at the live end": paging it
+  // must not arm following on its own, and must not release an explicit one
+  const short = makeViewer();
+  short.v.loadBuffer(encode(seconds(60)), 'rcfm');
+  assert.ok(short.g.signals.lastTime - short.g.signals.start + 120 <= short.g.winlength);
+  short.v.nextpage();
+  short.v.previouspage();
+  assert.equal(short.v.getFollow(), false);
+  short.v.setFollow(true);
+  short.v.nextpage();
+  assert.equal(short.v.getFollow(), true);
 });
 
 /* -------------------------------------------------------------- MHR button */

@@ -122,7 +122,8 @@ class Signals {
    * 12 (8 + the legacy streamed code word, accepted only when the word really
    * is one). The first candidate whose body is a whole number of samples wins
    * — the divisibility rule of fhrpy.io.read_fhr; when none fits (a file still
-   * being written) the first candidate is assumed. Reading a 4-byte header as
+   * being written) the first candidate is assumed. `.rcf*` files are recorder
+   * files and prefer 8; every other extension prefers 4. Reading a 4-byte header as
    * an 8-byte one shifts every sample and draws a trace that looks plausible
    * but is wrong, which is why this is detected rather than assumed.
    */
@@ -467,7 +468,10 @@ class GraphPlot {
    * `mecg` or `mhrOximeter`, TOCO by `toco`. Without delays, the raw array.
    * The tail left empty by the shift is "no signal" (0 for a heart rate, NaN
    * for the TOCO), which is why the right edge of a delayed channel sits back
-   * in real time. A blank heart-rate sample never erases a real one that
+   * in real time. Symmetrically, where a channel's delay DROPS going forward
+   * (SpO2 12.5 s to a Toco pulse 6 s), its samples jump forward and leave a gap
+   * of the difference at the sensor change: that blank is real, it is the span
+   * no sensor ever estimated. A blank heart-rate sample never erases a real one that
    * another mode placed at a sensor change. Cached per channel until the
    * data, the marks or the delays change. The file itself is never modified.
    */
@@ -1408,7 +1412,13 @@ export class FHRViewer {
 
   /** After a navigation by the user: following stays on only while the view sits at the live end. */
   _afterUserScroll() {
-    const on = this.graph.signals.start >= 0 && this.graph.time >= this._liveEnd() - 0.5;
+    const g = this.graph, s = g.signals;
+    if (s.start < 0) return;
+    const atEnd = g.time >= this._liveEnd() - 0.5;
+    // A recording shorter than the window is always "at the live end": paging it
+    // must not ARM following by itself — only an explicit setFollow() may.
+    const fits = s.lastTime - s.start + 120 <= g.winlength;
+    const on = atEnd && (this._follow || !fits);
     if (on === this._follow) return;
     this._follow = on;
     this._btn.follow.classList.toggle('active', on);
@@ -1641,8 +1651,9 @@ export class FHRViewer {
    * window.open()/print() is blocked.
    *
    * Options: cmPerMin (1 | 3), paper ('A4' | 'letter' | 'legal'), header
-   * (array of text lines printed above the strip on every page, with
-   * "page i/n"), footer (one line at the bottom), fillLastPage (keep the
+   * (array of text lines printed above the strip on every page, followed by
+   * "page i/n" — which `pageNumbers` forces on or off), footer (one line at
+   * the bottom), fillLastPage (keep the
    * regular pace on the last page and fill it with an empty grid instead of
    * sliding back over the previous page), filename, pageWidthCm,
    * pageHeightCm, overlapMin. The printed axis follows `timeZone` and the
@@ -1660,6 +1671,9 @@ export class FHRViewer {
     const overlapSec = (opts.overlapMin != null ? opts.overlapMin : 2) * 60;
     const headerLines = Array.isArray(opts.header) ? opts.header.map((l) => String(l)) : [];
     const footer = opts.footer ? String(opts.footer) : '';
+    // "page i/n" comes with the header block; `pageNumbers` forces it either way,
+    // so a print with no text options is the one this viewer has always made.
+    const pageNumbers = opts.pageNumbers != null ? !!opts.pageNumbers : (headerLines.length > 0 || !!footer);
 
     // Offscreen render surface that reuses the parsed signals + display state.
     const box = document.createElement('div');
@@ -1707,7 +1721,7 @@ export class FHRViewer {
     }
     document.body.removeChild(box);
 
-    const pdf = this._buildPdf(jpegs, imgW, imgH, W, H, imgWpt, imgHpt, { header: headerLines, footer });
+    const pdf = this._buildPdf(jpegs, imgW, imgH, W, H, imgWpt, imgHpt, { header: headerLines, footer, pageNumbers });
     const url = URL.createObjectURL(new Blob([pdf], { type: 'application/pdf' }));
     const a = document.createElement('a');
     a.href = url; a.download = `${opts.filename || 'ctg'}.pdf`;
@@ -1781,7 +1795,7 @@ export class FHRViewer {
         cs += `BT /F1 ${size} Tf ${tx} ${(y - size).toFixed(2)} Td (${pdfText(line)}) Tj ET\n`;
         y -= lineH;
       });
-      cs += `BT /F1 9 Tf ${(W - 80).toFixed(2)} ${(H - 30).toFixed(2)} Td (${pdfText(`page ${i + 1}/${n}`)}) Tj ET\n`;
+      if (text.pageNumbers) cs += `BT /F1 9 Tf ${(W - 80).toFixed(2)} ${(H - 30).toFixed(2)} Td (${pdfText(`page ${i + 1}/${n}`)}) Tj ET\n`;
       if (footer) cs += `BT /F1 7 Tf ${tx} 12 Td (${pdfText(footer)}) Tj ET\n`;
       obj(content, { dict: `<< /Length ${cs.length} >>`, stream: enc(cs) });
       obj(page, `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${W} ${H}] `
@@ -1925,7 +1939,11 @@ export class FHRViewer {
   setRange(minBpm, maxBpm) {
     this.graph.signals.minRCF = Number(minBpm);
     this.graph.signals.maxRCF = Number(maxBpm);
+    // The grid bounds set the vertical scale, and the vertical scale sets
+    // winlength: while following, the live end must stay in view.
+    this._snapToLiveEnd();
     this.graph.redraw();
+    this._updateScrollBar();
     this._emit('rangeChange', { min: this.graph.signals.minRCF, max: this.graph.signals.maxRCF });
     return this;
   }
