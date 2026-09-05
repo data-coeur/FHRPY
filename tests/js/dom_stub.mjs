@@ -22,15 +22,35 @@ class ClassList {
   toString() { return [...this.set].join(' '); }
 }
 
+/**
+ * Every 2D context handed out, in creation order — the print draws on an
+ * offscreen canvas of its own, which a test can only reach from here.
+ */
+export const canvasContexts = [];
+
 function makeContext(canvas) {
   const ctx = {
-    canvas, fillStyle: '', strokeStyle: '', lineWidth: 1, font: '', textAlign: '', textBaseline: '',
+    canvas, fillStyle: '', strokeStyle: '', textAlign: '', textBaseline: '',
     imageSmoothingEnabled: true, calls: [],
   };
   for (const m of ['clearRect', 'beginPath', 'moveTo', 'lineTo', 'stroke', 'fill', 'closePath']) ctx[m] = () => {};
   ctx.fillRect = (x, y, w, h) => ctx.calls.push({ op: 'fillRect', x, y, w, h, style: ctx.fillStyle });
   ctx.fillText = (text, x, y) => ctx.calls.push({ op: 'fillText', text: String(text), x, y, style: ctx.fillStyle });
   ctx.measureText = (t) => ({ width: 8 * String(t).length });
+  // `font` and `lineWidth` are recorded as they are assigned: what the strip
+  // measures on paper is asserted against what it measures on screen.
+  let font = '', lineWidth = 1;
+  Object.defineProperty(ctx, 'font', {
+    get: () => font,
+    set: (v) => { font = String(v); ctx.calls.push({ op: 'font', text: font }); },
+    enumerable: true,
+  });
+  Object.defineProperty(ctx, 'lineWidth', {
+    get: () => lineWidth,
+    set: (v) => { lineWidth = Number(v); ctx.calls.push({ op: 'lineWidth', w: lineWidth }); },
+    enumerable: true,
+  });
+  canvasContexts.push(ctx);
   return ctx;
 }
 

@@ -43,11 +43,36 @@ unchanged defaults**, plus the new requests of the same issue:
 - **White paper** on screen and print; the FHR label chips take the colour of
   what they cover, so the label on the 160 line is white above the safe band and
   grey inside it. (#24)
+- **Printed strip at screen size**: `GraphPlot.uiScale` (1 = screen) multiplies
+  every screen-pixel size — fonts, the chips the figures sit in, line widths and
+  the band that carries the time axis — and `print()` sets it to its own
+  oversampling ratio, so a printed text measures the millimetres the screen
+  shows instead of half of them. (#27)
+- **`printGeometry({paper, cmPerMin, bpmPerCm})`**: the vertical geometry of the
+  printed strip in centimetres (`bpmPerCm`, `cmPerMin`, `fhrHeightCm`,
+  `tocoHeightCm`, `tocoRange`, `tocoPerCm`, `graphHeightCm`, `stripHeightCm`),
+  derived from the ratios `resize()` uses instead of a hard-coded 12.63 cm that
+  forgot the time-axis band and shrank every scale by ~3 %. `print()` takes the
+  strip height from it; an FHR range too wide for the sheet clamps the strip and
+  the returned scales follow, the paper speed included. (#27)
+- **`print()` header block**: a line may be a list of `{text, bold}` runs (bold
+  key label, plain value — chained `Tj` in one `BT`/`ET`, `/F2` Helvetica-Bold
+  added to the page resources), and `logo` (`{jpeg, width, height, heightPt}`)
+  opens the block with a rasterised mark. Objects 1-5 are now fixed (`null` for
+  the logo when there is none, so the numbering never moves). A bare string line
+  and a `print()` with no options behave exactly as before. (#27)
+- **`pdfText()` encodes the whole of WinAnsi**: the 0x80-0x9F block (`€`, `œ`,
+  `Œ`, `Ÿ`, `“ ”`, `•`, `–`, `—`) was sent to `?` — "Maternité du Cœur" printed
+  as "Maternité du C?ur" — and a control character (a newline typed in a form
+  value) reached a PDF literal string raw, swallowing the rest of the line; it
+  becomes a space. (#27)
 
 ### Tests
 
 - `npm test` → `node --test 'tests/js/*.test.mjs'`: browser-free unit tests of the viewer
-  with a small DOM stub (no dependency). (#25)
+  with a small DOM stub (no dependency). (#25) The stub's canvas context also
+  records `font` and `lineWidth` assignments, so what the strip measures on
+  paper can be asserted against what it measures on screen. (#27)
 - `e2e/viewer_options.spec.ts`: Playwright checks built from the current source
   (header detection in a real browser, paper and label pixels, follow control,
   MHR button, resize handle, labels).

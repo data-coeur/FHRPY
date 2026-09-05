@@ -104,9 +104,23 @@ any extra keyword as-is (`FHRViewer(path, labels=..., delays=..., follow=True)`)
 | `bytesPerSample` | from the extension | `6`, `8` or `12` when the extension is ambiguous (OpenCTG `.fhr` files are 8 bytes/sample, FHRMA `.fhr` files 6) |
 | `headerBytes` | auto | `4` or `8`; by default detected by divisibility of the body, as `fhrpy.io.read_fhr` does |
 
-`print({cmPerMin, paper, header, footer, fillLastPage, filename})` downloads a
-multi-page landscape PDF (`A4` by default, `letter` / `legal`) at 1 or 3 cm/min,
-with the header lines and `page i/n` on every page.
+`print({cmPerMin, paper, header, footer, logo, fillLastPage, filename})`
+downloads a multi-page landscape PDF (`A4` by default, `letter` / `legal`) at
+1 or 3 cm/min, with the header lines and `page i/n` on every page. A header
+line is a string, or a list of `{text, bold}` runs so a key label prints bold
+and its value plain; `logo` (`{jpeg, width, height, heightPt}`) opens the block
+with a rasterised mark. Text is written as real PDF text in WinAnsiEncoding, so
+it stays searchable — the 0x80–0x9F block included (`€`, `œ`, `“ ”`, `—`).
+
+`printGeometry({paper, cmPerMin, bpmPerCm})` returns, in centimetres, the
+vertical geometry the print will really use — `{bpmPerCm, cmPerMin,
+fhrHeightCm, tocoHeightCm, tocoRange, tocoPerCm, graphHeightCm, stripHeightCm}`
+— derived from the graph's own ratios (8 cm of FHR at 20 bpm/cm and 4 cm of
+TOCO for 0–100 with the default 50–210 range). A host that prints the scales in
+its header block announces what a ruler measures on the paper. An FHR range too
+wide for the sheet clamps the strip and every returned scale follows, the paper
+speed included: the viewer derives its time window from the vertical scale, so
+the two are not independent.
 
 **Marker conventions** (companion `.fhrh` / `.marks` file, one `SSSSSSS text`
 line per marker): `$ ACC 192`-style lines are computed zones; `£text` is a

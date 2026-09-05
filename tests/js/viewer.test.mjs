@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { installDom, domEvent } from './dom_stub.mjs';
+import { installDom, domEvent, canvasContexts } from './dom_stub.mjs';
 
 const { document } = installDom();
 const { FHRViewer, Signals } = await import('../../fhrpy/viewer/web/fhrviewer.js');
@@ -487,4 +487,154 @@ test('white paper; the label chip on the 160 line is white above the band edge a
   const c140 = chipsBefore('140');                                   // fully inside the band: grey all over
   assert.equal(c140.length, 2);
   assert.equal(c140[1].h, c140[0].h);
+});
+
+/* -------------------------------------------------- print geometry & paper */
+
+/** Capture the PDF `print()` hands to the browser, as latin1 text plus its page count. */
+async function capturePdf(v, opts) {
+  let blob = null;
+  const saved = URL.createObjectURL, savedRevoke = URL.revokeObjectURL;
+  URL.createObjectURL = (b) => { blob = b; return 'blob:test'; };
+  URL.revokeObjectURL = () => {};
+  try { v.print(opts); } finally { URL.createObjectURL = saved; URL.revokeObjectURL = savedRevoke; }
+  const text = Buffer.from(await blob.arrayBuffer()).toString('latin1');
+  return { text, pages: (text.match(/\/Type \/Page\b(?!s)/g) || []).length };
+}
+
+const PT_PER_CM = 28.3465;
+const A4_HEIGHT_PT = 595;
+/** What a page keeps for the header block and the footer (PRINT_*_RESERVE_PT). */
+const A4_FREE_PT = A4_HEIGHT_PT - (20 + 8 + 8 * 11 + 26) - 16;
+
+test("printGeometry(): the scales come from the graph's own ratios, and a wider FHR range clamps to the page (#27)", () => {
+  const { v } = makeViewer();
+  v.loadBuffer(encode(seconds(1800)), 'rcfm');
+  // Default 50-210 bpm over the 2/3 of the graph the FHR takes: 8 cm at 20 bpm/cm,
+  // 4 cm of TOCO for 0-100, i.e. 25 units/cm — derived, never assumed twice.
+  const g = v.printGeometry();
+  assert.equal(g.bpmPerCm, 20);
+  assert.ok(Math.abs(g.fhrHeightCm - 8) < 1e-6, `${g.fhrHeightCm} cm of FHR`);
+  assert.ok(Math.abs(g.tocoHeightCm - 4) < 1e-6, `${g.tocoHeightCm} cm of TOCO`);
+  assert.equal(g.tocoRange, 100);
+  assert.ok(Math.abs(g.tocoPerCm - 25) < 1e-6);
+  assert.equal(g.cmPerMin, 1);
+  // The strip is the graph PLUS the band that carries the time axis.
+  assert.ok(Math.abs(g.stripHeightCm - (g.graphHeightCm + 15 / 37.8)) < 1e-9);
+  // The speed button stretches the time axis; the vertical scale does not move.
+  const fast = v.printGeometry({ cmPerMin: 3 });
+  assert.equal(fast.cmPerMin, 3);
+  assert.equal(fast.bpmPerCm, 20);
+
+  // A range wider than the default would run the strip off the sheet: the paper
+  // wins, and every announced scale follows what it can hold — the speed too,
+  // since the time window is derived from the vertical scale.
+  v.setRange(30, 250);
+  const wide = v.printGeometry({ paper: 'A4' });
+  assert.ok(wide.stripHeightCm * PT_PER_CM <= A4_FREE_PT + 1e-9);
+  assert.ok(wide.bpmPerCm > 20);
+  assert.ok(Math.abs(wide.tocoPerCm - 100 / wide.tocoHeightCm) < 1e-9);
+  assert.ok(Math.abs(wide.cmPerMin - 20 / wide.bpmPerCm) < 1e-9);
+  assert.ok(wide.cmPerMin < 1, `${wide.cmPerMin} cm/min`);
+});
+
+test('print(): the strip is placed at the height printGeometry() announces, between header and footer (#27)', async () => {
+  const { v } = makeViewer();
+  v.loadBuffer(encode(seconds(1800)), 'rcfm');
+  const placement = (text) => {
+    const m = /q ([\d.]+) 0 0 ([\d.]+) ([\d.]+) ([\d.]+) cm \/Im Do Q/.exec(text);
+    return { width: +m[1], height: +m[2], x: +m[3], y: +m[4] };
+  };
+  const plain = await capturePdf(v, {});
+  const box = placement(plain.text);
+  assert.ok(Math.abs(box.height - v.printGeometry().stripHeightCm * PT_PER_CM) < 0.5, `${box.height} pt`);
+  // A clamped strip still sits above the footer line and below the header block.
+  v.setRange(30, 250);
+  const header = [[{ text: 'Bed 3 — ', bold: true }, { text: 'Jane Doe' }], 'started 12:00'];
+  const wide = await capturePdf(v, { paper: 'A4', header, footer: 'FHRPY print' });
+  const clamped = placement(wide.text);
+  assert.ok(Math.abs(clamped.height - v.printGeometry({ paper: 'A4' }).stripHeightCm * PT_PER_CM) < 0.5);
+  assert.ok(clamped.y > 16, `strip bottom at ${clamped.y} pt, above the footer`);
+  assert.ok(clamped.y + clamped.height <= A4_HEIGHT_PT - 20 - (8 + header.length * 11) + 0.5);
+});
+
+test('print(): axis, figures, chips and line widths measure on paper what they measure on screen (#27)', () => {
+  const { v, g, ctx } = makeViewer();
+  v.loadBuffer(encode(seconds(1800)), 'rcfm');
+  const SCREEN_PX_PER_CM = 37.8, A4_WIDTH_CM = 27;
+  ctx.calls.length = 0;
+  g.redraw();
+  const screen = ctx.calls.slice();
+  const before = canvasContexts.length;
+  v.print({ paper: 'A4', header: ['x'], footer: '', fillLastPage: true });
+  // The print draws on offscreen canvases of its own: keep the widest one.
+  const printCtx = canvasContexts.slice(before).sort((a, b) => b.canvas.width - a.canvas.width)[0];
+  const printed = printCtx.calls;
+  const printPxPerCm = printCtx.canvas.width / A4_WIDTH_CM;
+  assert.ok(printPxPerCm > SCREEN_PX_PER_CM, 'the strip really is oversampled');
+
+  /** The distinct values of one kind of screen-pixel size, in centimetres. */
+  const inCm = (calls, pxPerCm, pick, keep = () => true) =>
+    [...new Set(calls.map(pick).filter((x) => Number.isFinite(x)).map((x) => +(x / pxPerCm).toFixed(3)))]
+      .filter(keep).sort((a, b) => a - b);
+  const fontPx = (c) => (c.op === 'font' ? parseFloat(c.text) : NaN);
+  assert.ok(inCm(screen, SCREEN_PX_PER_CM, fontPx).length > 1);
+  assert.deepEqual(inCm(printed, printPxPerCm, fontPx), inCm(screen, SCREEN_PX_PER_CM, fontPx));
+  // The chips the bpm / mmHg figures sit in (a chip kept at screen height on an
+  // oversampled surface clips the digits it holds).
+  const chipPx = (c) => (c.op === 'fillRect' ? c.h : NaN);
+  const small = (cm) => cm < 1;
+  const printedChips = inCm(printed, printPxPerCm, chipPx, small);
+  assert.ok(printedChips.length > 0);
+  assert.deepEqual(printedChips, inCm(screen, SCREEN_PX_PER_CM, chipPx, small));
+  // And the line widths: grid, curves and frame keep their weight in millimetres.
+  const widthPx = (c) => (c.op === 'lineWidth' ? c.w : NaN);
+  const printedWidths = inCm(printed, printPxPerCm, widthPx);
+  assert.ok(printedWidths.length > 1);
+  assert.deepEqual(printedWidths, inCm(screen, SCREEN_PX_PER_CM, widthPx));
+  // The band under the trace that carries the time axis, too.
+  const axisBand = (calls, canvas, pxPerCm) =>
+    (canvas.height - calls.filter((c) => c.op === 'fillText').at(-1).y) / pxPerCm;
+  assert.ok(Math.abs(axisBand(printed, printCtx.canvas, printPxPerCm)
+    - axisBand(screen, ctx.canvas, SCREEN_PX_PER_CM)) < 1e-3);
+});
+
+test('print(): bold runs, a logo and the WinAnsi 0x80-0x9F block reach the PDF; the xref stays intact (#27)', async () => {
+  const { v } = makeViewer();
+  v.loadBuffer(encode(seconds(1800)), 'rcfm');
+  /** Every cross-reference offset lands on the header of the object it numbers. */
+  const assertXref = (pdf) => {
+    const startxref = +/startxref\s+(\d+)/.exec(pdf)[1];
+    const table = /xref\s+0 (\d+)\s([\s\S]*)/.exec(pdf.slice(startxref));
+    const offsets = [...table[2].matchAll(/(\d{10}) \d{5} [nf]/g)].map((m) => +m[1]);
+    assert.equal(offsets.length, +table[1]);
+    offsets.slice(1).forEach((o, i) => assert.match(pdf.slice(o, o + 12), new RegExp(`^${i + 1} 0 obj`)));
+  };
+  const logo = { jpeg: new Uint8Array([0xff, 0xd8, 0xff, 0xd9]), width: 120, height: 34, heightPt: 22 };
+  // A label is bold, the value it introduces is not; « Maternité du Cœur »
+  // carries the ligature the 0x80-0x9F block encodes, and a value typed on two
+  // lines must not swallow the rest of the line.
+  const header = [
+    [{ text: 'Maternité du Cœur — ', bold: true }, { text: 'Bed 3' }],
+    [{ text: 'Comment: ', bold: true }, { text: 'first\nsecond' }],
+    'plain line',
+  ];
+  const withLogo = await capturePdf(v, { paper: 'A4', header, footer: '20 € — “quoted”', logo });
+  assert.ok(withLogo.text.includes('/BaseFont /Helvetica-Bold'));
+  assert.ok(withLogo.text.includes(`/Subtype /Image /Width ${logo.width}`));
+  assert.ok(withLogo.text.includes('/Lo 5 0 R'));
+  assert.match(withLogo.text, /\/Lo Do/);
+  assert.ok(withLogo.text.includes('/F2 10 Tf (Maternit\\351 du C\\234ur \\227 ) Tj'));   // œ = 0x9c, — = 0x97
+  assert.ok(withLogo.text.includes('/F1 10 Tf (Bed 3) Tj'));
+  assert.ok(withLogo.text.includes('(first second) Tj'));       // the newline is a space, not a broken string
+  assert.ok(withLogo.text.includes('(plain line) Tj'));          // a bare string is still a line
+  assert.ok(withLogo.text.includes('(20 \\200 \\227 \\223quoted\\224) Tj'));   // euro and typographic quotes
+  assertXref(withLogo.text);
+
+  // Without a logo the numbering does not move: object 5 is `null` and nothing is painted.
+  const bare = await capturePdf(v, { paper: 'A4', header, footer: '' });
+  assert.ok(bare.text.includes('5 0 obj\nnull'));
+  assert.ok(!bare.text.includes('/Lo 5 0 R'));
+  assert.ok(!/\/Lo Do/.test(bare.text));
+  assertXref(bare.text);
 });

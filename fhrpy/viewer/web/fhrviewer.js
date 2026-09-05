@@ -324,6 +324,34 @@ class ScrollBar {
 }
 
 /* ----------------------------------------------------------------------------
+ * Print geometry and text encoding.
+ * ------------------------------------------------------------------------- */
+/**
+ * Printable page sizes in points, landscape: [width, height, printable strip
+ * width in cm]. The third value is what the strip is drawn at, so a page holds
+ * ~27 min at 1 cm/min on A4.
+ */
+const PRINT_PAPERS = { A4: [842, 595, 27], letter: [792, 612, 25.5], legal: [1008, 612, 33] };
+/** What a page reserves above the strip: top margin, the gap, eight header lines, the logo. */
+const PRINT_TOP_RESERVE_PT = 20 + 8 + 8 * 11 + 26;
+/** …and below it, for the footer line. */
+const PRINT_FOOT_RESERVE_PT = 16;
+/**
+ * The code points WinAnsiEncoding places in its 0x80-0x9F block, mapped to the
+ * byte that encodes them. They are NOT Latin-1, so writing their code point
+ * straight out would draw another glyph — among them the euro sign, the
+ * typographic quotes and the French ligature œ, which a name or a ward label
+ * ("Maternité du Cœur") carries. Everything outside WinAnsi still becomes '?':
+ * embedding a Unicode font is a separate piece of work.
+ */
+const WIN_ANSI_HIGH = {
+  0x20ac: 0x80, 0x201a: 0x82, 0x0192: 0x83, 0x201e: 0x84, 0x2026: 0x85, 0x2020: 0x86, 0x2021: 0x87,
+  0x02c6: 0x88, 0x2030: 0x89, 0x0160: 0x8a, 0x2039: 0x8b, 0x0152: 0x8c, 0x017d: 0x8e, 0x2018: 0x91,
+  0x2019: 0x92, 0x201c: 0x93, 0x201d: 0x94, 0x2022: 0x95, 0x2013: 0x96, 0x2014: 0x97, 0x02dc: 0x98,
+  0x2122: 0x99, 0x0161: 0x9a, 0x203a: 0x9b, 0x0153: 0x9c, 0x017e: 0x9e, 0x0178: 0x9f,
+};
+
+/* ----------------------------------------------------------------------------
  * GraphPlot — canvas grid + curves + svg overlays. Ported maths.
  * ------------------------------------------------------------------------- */
 class GraphPlot {
@@ -343,7 +371,14 @@ class GraphPlot {
     this.BorderLeft = 0;
     this.BorderRight = 0;
     this.BorderTop = 0;
-    this.BorderBottom = 15;
+    // Every size below is written in *screen* pixels: fonts, the chips the
+    // figures sit in, line widths, the bottom band that carries the time axis.
+    // A print surface is oversampled (several device pixels per screen pixel),
+    // so those sizes are multiplied by `uiScale` or the paper comes out with an
+    // axis and figures half the size the screen shows. 1 = screen; print() sets
+    // it to its own oversampling ratio.
+    this.uiScale = 1;
+    this.BorderBottom = 15 * this.uiScale;
     this.mouseMode = 'None';
     this.editingMark = -1;
     this.displayMorpho = true;        // baseline + accel/decel zones toggle
@@ -393,6 +428,7 @@ class GraphPlot {
 
   /* --- geometry ----------------------------------------------------------- */
   resize() {
+    this.BorderBottom = 15 * this.uiScale;   // the time-axis band is a screen-pixel size
     const h = this.container.clientHeight;
     const w = this.container.clientWidth;
     this.canvas.height = h;
@@ -553,6 +589,7 @@ class GraphPlot {
   /* --- drawing primitives ------------------------------------------------- */
   hline(x1, x2, y, w, color) {
     this.ctx.beginPath();
+    w *= this.uiScale;
     const r = 0.5 * w;
     this.ctx.moveTo(Math.round(x1), Math.round(y - r) + r);
     this.ctx.lineTo(Math.round(x2), Math.round(y - r) + r);
@@ -563,6 +600,7 @@ class GraphPlot {
 
   vline(x, y1, y2, w, color) {
     this.ctx.beginPath();
+    w *= this.uiScale;
     const r = 0.5 * w;
     this.ctx.moveTo(Math.round(x - r) + r, Math.round(y1));
     this.ctx.lineTo(Math.round(x - r) + r, Math.round(y2));
@@ -578,10 +616,10 @@ class GraphPlot {
     ctx.fillStyle = PAPER_COLOR;
     ctx.fillRect(0, 0, this.TotalWidth, this.TotalHeight);
 
-    ctx.font = '18px Arial';
+    ctx.font = `${18 * this.uiScale}px Arial`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    const textheight = 22;
+    const textheight = 22 * this.uiScale;
 
     // central "safe"/normal FHR band (default 110..160 bpm, configurable)
     const span = this.signals.maxRCF - this.signals.minRCF;
@@ -630,7 +668,7 @@ class GraphPlot {
         const val = this.signals.maxRCF - 5 * j;
         for (let i = 600 - (this.time % 600); i < this.winlength; i += 600) {
           const text = val.toString();
-          const textwidth = ctx.measureText(text).width + 4;
+          const textwidth = ctx.measureText(text).width + 4 * this.uiScale;
           const textx = this.BorderLeft + (i / this.winlength) * this.graphWidth - textwidth / 2;
           const texty = ty - textheight / 2;
           ctx.fillStyle = PAPER_COLOR;
@@ -661,7 +699,7 @@ class GraphPlot {
       if (this.fullGrid || j % 4 === 0) {
         for (let i = 600 - (this.time % 600); i < this.winlength; i += 600) {
           const text = (100 - 10 * j).toString();
-          const textwidth = ctx.measureText(text).width + 4;
+          const textwidth = ctx.measureText(text).width + 4 * this.uiScale;
           const textx = this.BorderLeft + (i / this.winlength) * this.graphWidth - textwidth / 2;
           const texty = ty - textheight / 2;
           ctx.fillStyle = PAPER_COLOR;
@@ -673,7 +711,7 @@ class GraphPlot {
     }
 
     // time-tick labels along the bottom (HHhMM)
-    ctx.font = '14px Arial';
+    ctx.font = `${14 * this.uiScale}px Arial`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
     ctx.fillStyle = '#000000';
@@ -790,7 +828,7 @@ class GraphPlot {
       // Only the analysed fetal channel carries the false-signal mask (NOT the
       // maternal MHR, which is the reference, nor the computed FHRi/baseline).
       const canFalse = ch.name === this.falseSignalChannel;
-      this.ctx.lineWidth = 1;
+      this.ctx.lineWidth = this.uiScale;
       let started = false, curColor = null, lastX = 0, lastY = 0, haveLast = false;
       const flush = () => { if (started) { this.ctx.stroke(); started = false; } };
       for (let k = 0; k <= this.winlength * s.srate; k += 4) {
@@ -850,8 +888,9 @@ class GraphPlot {
     const s = this.signals;
     this.markRects = [];
     if (!this.displayMarks) return;   // marker show/hide toggle
-    const all = [{ x: this.graphWidth - 200, y: this.BorderTop, w: 200, h: 21 }];
-    this.ctx.font = '16px Arial';
+    const u = this.uiScale;                  // marker text is written in screen pixels too
+    const all = [{ x: this.graphWidth - 200 * u, y: this.BorderTop, w: 200 * u, h: 21 * u }];
+    this.ctx.font = `${16 * u}px Arial`;
     this.ctx.textAlign = 'left';
     this.ctx.textBaseline = 'top';
     if (!s.Marks) return;
@@ -869,9 +908,9 @@ class GraphPlot {
       const texts = dtext.split('\r');
       for (let k = 0; k < texts.length; k++) {
         let j = 0;
-        const rect = { x: tmpx + 3, y: this.BorderTop, w: this.ctx.measureText(texts[k]).width, h: 17 };
+        const rect = { x: tmpx + 3 * u, y: this.BorderTop, w: this.ctx.measureText(texts[k]).width, h: 17 * u };
         while (j < all.length) {
-          if (this.intersectRect(rect, all[j])) { rect.y += 5; j = 0; } else j++;
+          if (this.intersectRect(rect, all[j])) { rect.y += 5 * u; j = 0; } else j++;
         }
         all.push(rect);
         if (k === 0) {
@@ -879,7 +918,7 @@ class GraphPlot {
           this.markRects.push(rect);
         }
         if (i !== this.editingMark && tmpx0 > 0 && tmpx0 < this.winlength) {
-          this.ctx.fillText(texts[k], tmpx + 3, rect.y);
+          this.ctx.fillText(texts[k], tmpx + 3 * u, rect.y);
         }
       }
     }
@@ -1642,18 +1681,57 @@ export class FHRViewer {
   }
 
   /**
+   * The vertical geometry of the printed strip, in centimetres, derived from
+   * the very ratios `GraphPlot.resize()` uses (a 5 % gap, one third of TOCO,
+   * two thirds of FHR) rather than assumed a second time. A host that prints
+   * the scales in its own header block can then announce what a ruler measures
+   * on the paper.
+   *
+   * The paper speed comes back with them and is NOT independent of the vertical
+   * scale: `resize()` derives the time window from it
+   * (`winlength = graphWidth * 60 / sizeof20bpm / (1 + 2 * is3cm)`), so one
+   * centimetre carries `20 / bpmPerCm` minute at the 1 cm/min setting. An FHR
+   * range wider than the default 50–210 would push the strip off the sheet: the
+   * paper then wins, the strip is clamped to what is left between the header
+   * block and the footer, and every returned scale follows — including the
+   * speed. Better a slower page announced honestly than a cropped trace.
+   *
+   * Options: `paper` and `cmPerMin` as `print()` takes them, plus `bpmPerCm`
+   * to ask for another vertical scale (20 by default).
+   */
+  printGeometry(opts = {}) {
+    const s = this.graph.signals;
+    const axisCm = 15 / 37.8;                               // the band that carries the time axis
+    const paper = PRINT_PAPERS[opts.paper] || PRINT_PAPERS.A4;
+    // What is left of the page once the header block and the footer are served.
+    const maxGraphCm = (paper[1] - PRINT_TOP_RESERVE_PT - PRINT_FOOT_RESERVE_PT) / 28.3465 - axisCm;
+    const span = s.maxRCF - s.minRCF;
+    let bpmPerCm = opts.bpmPerCm || 20;
+    let graphHeightCm = (span / bpmPerCm) / ((2 / 3) * 0.95);   // FHR is 2/3 of the graph minus the 5 % gap
+    if (graphHeightCm > maxGraphCm) { graphHeightCm = maxGraphCm; bpmPerCm = span / (graphHeightCm * (2 / 3) * 0.95); }
+    const fhrHeightCm = (2 / 3) * 0.95 * graphHeightCm;     // 8 cm at 20 bpm/cm over 50-210
+    const tocoHeightCm = (1 / 3) * 0.95 * graphHeightCm;    // 4 cm — half the FHR band
+    const tocoRange = s.maxTOCO - s.minTOCO;                // 0-100 on the CTG grid
+    const cmPerMin = (20 / bpmPerCm) * (opts.cmPerMin === 3 ? 3 : 1);
+    return { bpmPerCm, cmPerMin, fhrHeightCm, graphHeightCm, tocoHeightCm, tocoRange, tocoPerCm: tocoRange / tocoHeightCm, stripHeightCm: graphHeightCm + axisCm };
+  }
+
+  /**
    * Build a multi-page landscape **PDF** of the whole recording and download
    * it. Geometry: 1 cm/min horizontally (3 with `cmPerMin: 3`) and 20 bpm/cm
-   * vertically (a 12.63 cm graph area gives 20 bpm/cm for the default 50–210
-   * range); consecutive pages overlap by ~2 min so nothing falls on a seam.
-   * The PDF is assembled in-page (one JPEG strip per page) and saved via a
-   * Blob download, so it works even inside a notebook iframe where
+   * vertically — `printGeometry()` derives the strip's height from that scale
+   * (8 cm of FHR, 4 cm of TOCO for 0–100, i.e. 25 units/cm) instead of assuming
+   * it; consecutive pages overlap by ~2 min so nothing falls on a seam. The PDF
+   * is assembled in-page (one JPEG strip per page) and saved via a Blob
+   * download, so it works even inside a notebook iframe where
    * window.open()/print() is blocked.
    *
    * Options: cmPerMin (1 | 3), paper ('A4' | 'letter' | 'legal'), header
-   * (array of text lines printed above the strip on every page, followed by
-   * "page i/n" — which `pageNumbers` forces on or off), footer (one line at
-   * the bottom), fillLastPage (keep the
+   * (array of lines printed above the strip on every page — a line is a string
+   * or a list of `{text, bold}` runs, so a label can be bold and its value
+   * plain — followed by "page i/n", which `pageNumbers` forces on or off),
+   * footer (one line at the bottom), logo ({jpeg, width, height, heightPt}: a
+   * rasterised masthead opening the header block), fillLastPage (keep the
    * regular pace on the last page and fill it with an empty grid instead of
    * sliding back over the previous page), filename, pageWidthCm,
    * pageHeightCm, overlapMin. The printed axis follows `timeZone` and the
@@ -1662,15 +1740,26 @@ export class FHRViewer {
   print(opts = {}) {
     const src = this.graph, s = src.signals;
     if (s.start < 0) return this;
-    const pxPerCm = 37.8 * 2;                       // 2x oversampling for crisp print
-    // Paper: [width pt, height pt, printable strip width cm], landscape.
-    const PAPERS = { A4: [842, 595, 27], letter: [792, 612, 25.5], legal: [1008, 612, 33] };
-    const paper = PAPERS[opts.paper] || PAPERS.A4;
+    // The file's pixel sizes are screen pixels at 96 dpi; the print surface is
+    // oversampled, and `uiScale` keeps every text, chip and line width at the
+    // size the screen shows for the same paper geometry.
+    const CSS_PX_PER_CM = 37.8, OVERSAMPLING = 2;
+    const pxPerCm = CSS_PX_PER_CM * OVERSAMPLING;
+    const paper = PRINT_PAPERS[opts.paper] || PRINT_PAPERS.A4;
     const Wcm = opts.pageWidthCm || paper[2];       // fill the printable width (~1 cm/min)
-    const Hcm = opts.pageHeightCm || 12.63;         // graph area -> 20 bpm/cm
+    // The strip is the graph area **plus** the band that carries the time axis
+    // (`BorderBottom`), so the graph itself really measures what
+    // printGeometry() announces — a hard-coded height for the whole strip
+    // shrank every vertical scale by the height of that band.
+    const geometry = this.printGeometry(opts);
+    const Hcm = opts.pageHeightCm || geometry.stripHeightCm;
     const overlapSec = (opts.overlapMin != null ? opts.overlapMin : 2) * 60;
-    const headerLines = Array.isArray(opts.header) ? opts.header.map((l) => String(l)) : [];
+    // A header line is either a plain string or a list of `{text, bold}` runs.
+    const headerLines = Array.isArray(opts.header)
+      ? opts.header.map((l) => (Array.isArray(l) ? l.map((r) => ({ text: String(r.text), bold: !!r.bold })) : [{ text: String(l), bold: false }]))
+      : [];
     const footer = opts.footer ? String(opts.footer) : '';
+    const logo = opts.logo && opts.logo.jpeg ? opts.logo : null;   // masthead image
     // "page i/n" comes with the header block; `pageNumbers` forces it either way,
     // so a print with no text options is the one this viewer has always made.
     const pageNumbers = opts.pageNumbers != null ? !!opts.pageNumbers : (headerLines.length > 0 || !!footer);
@@ -1692,6 +1781,7 @@ export class FHRViewer {
     gp.timeZone = src.timeZone;                      // printed axis in the zone of the screen
     gp.delays = src.delays;                          // printed channels follow the display
     gp.is3cm = opts.cmPerMin === 3 ? 1 : 0;          // 1 cm/min (default) or 3 cm/min
+    gp.uiScale = OVERSAMPLING;                       // paper reads like the screen
     gp.fullGrid = 1;
 
     gp.time = s.start;
@@ -1721,7 +1811,7 @@ export class FHRViewer {
     }
     document.body.removeChild(box);
 
-    const pdf = this._buildPdf(jpegs, imgW, imgH, W, H, imgWpt, imgHpt, { header: headerLines, footer, pageNumbers });
+    const pdf = this._buildPdf(jpegs, imgW, imgH, W, H, imgWpt, imgHpt, { header: headerLines, footer, pageNumbers, logo });
     const url = URL.createObjectURL(new Blob([pdf], { type: 'application/pdf' }));
     const a = document.createElement('a');
     a.href = url; a.download = `${opts.filename || 'ctg'}.pdf`;
@@ -1733,7 +1823,8 @@ export class FHRViewer {
   /**
    * Assemble a minimal multi-page PDF, one full-strip DCTDecode (JPEG) per
    * page, with an optional header block (real PDF text, so it stays
-   * searchable and extractable), "page i/n" and a footer line.
+   * searchable and extractable) whose lines are lists of `{text, bold}` runs
+   * and which may open with a rasterised logo, "page i/n" and a footer line.
    */
   _buildPdf(jpegs, imgW, imgH, W, H, imgWpt, imgHpt, text = {}) {
     const parts = [];
@@ -1753,36 +1844,57 @@ export class FHRViewer {
       add('endobj\n');
     };
     const n = jpegs.length;
-    const header = text.header || [], footer = text.footer || '';
-    const lineH = 11, headerH = header.length ? 8 + header.length * lineH : 0;
+    // A header line reaches here as a list of `{text, bold}` runs; a bare string
+    // is still accepted, so an older caller keeps working.
+    const header = (text.header || []).map((l) => (Array.isArray(l) ? l : [{ text: String(l), bold: false }]));
+    const footer = text.footer || '';
+    const logo = text.logo && text.logo.jpeg ? text.logo : null;
+    const logoHpt = logo ? (logo.heightPt || 22) : 0;
+    const logoWpt = logo ? logoHpt * (logo.width / logo.height) : 0;
+    const lineH = 11;
+    const headerH = (header.length ? 8 + header.length * lineH : 0) + (logo ? logoHpt + 4 : 0);
     const pdfText = (str) => {
-      // WinAnsi: Latin-1 bytes; escape the PDF string delimiters.
+      // WinAnsi: Latin-1 bytes, the 0x80-0x9F block, and PDF string delimiters
+      // escaped. That block is not Latin-1 and used to go to '?' — it carries
+      // the euro sign, the typographic quotes, the bullet, the dashes and the
+      // French ligature œ.
       let out = '';
       for (const ch of String(str)) {
-        const c = ch.charCodeAt(0);
+        const c = ch.codePointAt(0);
         if (ch === '(' || ch === ')' || ch === '\\') out += '\\' + ch;
-        else if (c === 0x2014) out += '\\227';           // em dash
-        else if (c === 0x2013) out += '\\226';           // en dash
-        else if (c === 0x2019) out += "'";
-        else if (c === 0x2026) out += '...';
-        else if (c === 0xB7) out += '\\267';
-        else if (c > 255) out += '?';
-        else if (c > 126) out += '\\' + c.toString(8).padStart(3, '0');
-        else out += ch;
+        // A control character — a newline typed in a form value — is not a line
+        // break inside a PDF literal string: it would swallow the rest of the line.
+        else if (c < 0x20 || c === 0x7f) out += ' ';
+        else if (c <= 0x7e) out += ch;
+        else if (WIN_ANSI_HIGH[c] !== undefined) out += '\\' + WIN_ANSI_HIGH[c].toString(8).padStart(3, '0');
+        else if (c >= 0xa0 && c <= 0xff) out += '\\' + c.toString(8).padStart(3, '0');
+        else out += '?';
       }
       return out;
     };
-    const total = 3 + 3 * n;                         // catalog, pages, font, then 3 objects per page
+    // Objects 1-5 are fixed (catalog, page tree, regular font, bold font, logo
+    // image — `null` when there is none, so the numbering never moves); each
+    // page then takes three.
+    const total = 5 + 3 * n;
     add('%PDF-1.4\n%\xE2\xE3\xCF\xD3\n');
     obj(1, '<< /Type /Catalog /Pages 2 0 R >>');
     const pageNums = [];
-    for (let i = 0; i < n; i++) pageNums.push(6 + 3 * i);
+    for (let i = 0; i < n; i++) pageNums.push(8 + 3 * i);
     obj(2, `<< /Type /Pages /Count ${n} /Kids [${pageNums.map((p) => `${p} 0 R`).join(' ')}] >>`);
     obj(3, '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>');
-    const ty = (H - imgHpt - 20 - headerH).toFixed(2);   // 20 pt top margin + header block
+    obj(4, '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>');
+    if (logo) {
+      obj(5, {
+        dict: `<< /Type /XObject /Subtype /Image /Width ${logo.width} /Height ${logo.height} `
+          + `/ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${logo.jpeg.length} >>`,
+        stream: logo.jpeg,
+      });
+    } else obj(5, 'null');
+    // 20 pt top margin + the header block, and never below the footer line.
+    const ty = Math.max(14, H - imgHpt - 20 - headerH).toFixed(2);
     const tx = (Math.max(0, (W - imgWpt) / 2)).toFixed(2);   // centre the strip in X
     for (let i = 0; i < n; i++) {
-      const img = 4 + 3 * i, content = 5 + 3 * i, page = 6 + 3 * i;
+      const img = 6 + 3 * i, content = 7 + 3 * i, page = 8 + 3 * i;
       obj(img, {
         dict: `<< /Type /XObject /Subtype /Image /Width ${imgW} /Height ${imgH} `
           + `/ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${jpegs[i].length} >>`,
@@ -1790,16 +1902,26 @@ export class FHRViewer {
       });
       let cs = `q ${imgWpt.toFixed(2)} 0 0 ${imgHpt.toFixed(2)} ${tx} ${ty} cm /Im Do Q\n`;
       let y = H - 20;
+      // The logo opens the header block, in place of a product name in words.
+      if (logo) {
+        cs += `q ${logoWpt.toFixed(2)} 0 0 ${logoHpt.toFixed(2)} ${tx} ${(y - logoHpt).toFixed(2)} cm /Lo Do Q\n`;
+        y -= logoHpt + 4;
+      }
       header.forEach((line, k) => {
         const size = k === 0 ? 10 : 9;
-        cs += `BT /F1 ${size} Tf ${tx} ${(y - size).toFixed(2)} Td (${pdfText(line)}) Tj ET\n`;
+        // Consecutive Tj inside one BT/ET advance on their own: a run can change
+        // font without the caller having to know Helvetica's metrics.
+        cs += `BT ${tx} ${(y - size).toFixed(2)} Td`;
+        for (const run of line) cs += ` /${run.bold ? 'F2' : 'F1'} ${size} Tf (${pdfText(run.text)}) Tj`;
+        cs += ' ET\n';
         y -= lineH;
       });
       if (text.pageNumbers) cs += `BT /F1 9 Tf ${(W - 80).toFixed(2)} ${(H - 30).toFixed(2)} Td (${pdfText(`page ${i + 1}/${n}`)}) Tj ET\n`;
       if (footer) cs += `BT /F1 7 Tf ${tx} 12 Td (${pdfText(footer)}) Tj ET\n`;
       obj(content, { dict: `<< /Length ${cs.length} >>`, stream: enc(cs) });
       obj(page, `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${W} ${H}] `
-        + `/Resources << /XObject << /Im ${img} 0 R >> /Font << /F1 3 0 R >> >> /Contents ${content} 0 R >>`);
+        + `/Resources << /XObject << /Im ${img} 0 R${logo ? ' /Lo 5 0 R' : ''} >> `
+        + `/Font << /F1 3 0 R /F2 4 0 R >> >> /Contents ${content} 0 R >>`);
     }
     const xref = length;
     add(`xref\n0 ${total + 1}\n0000000000 65535 f \n`);

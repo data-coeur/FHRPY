@@ -634,10 +634,16 @@ class FHRViewer:
 
         ``cm_per_min`` is 1 (default) or 3; ``options`` are forwarded to the JS
         ``print()`` — ``paper`` (``"A4"`` / ``"letter"`` / ``"legal"``),
-        ``header`` (list of lines printed on every page), ``footer``,
-        ``fillLastPage``, ``filename``. Works in a notebook (the PDF is
-        assembled in-page and saved via a Blob download), where a print-dialog
-        pop-up would be blocked.
+        ``header`` (list of lines printed on every page; a line is a string or
+        a list of ``{"text": ..., "bold": ...}`` runs), ``footer``,
+        ``fillLastPage``, ``pageNumbers``, ``filename``. Works in a notebook
+        (the PDF is assembled in-page and saved via a Blob download), where a
+        print-dialog pop-up would be blocked.
+
+        The JS side also takes ``logo`` (a rasterised mark opening the header
+        block) and exposes ``printGeometry()``; both need bytes or a return
+        value that the one-way Python bridge does not carry, so they stay
+        JavaScript-only for now.
         """
         opts = {"cmPerMin": 3 if int(cm_per_min) == 3 else 1, **options}
         return self._post("print", opts)
