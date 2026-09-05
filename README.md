@@ -75,10 +75,46 @@ FHRViewer("examples/example_recording.fhr", analyze=True).serve()
 
 The viewer is a **Python-controllable object**: `set_markers()`, `scroll_to()`,
 `set_height()`, `set_scale()` (1 or 3 cm/min), `set_channel_visible()`,
-`set_zones_visible()`, `set_interpolate()`, and `on(event, callback)` to listen
-for scroll / button / marker events. It is responsive, supports a configurable
-number of signals per graph, FHR/MHR toggling with linear gap interpolation, and
-colored acceleration / deceleration / contraction zones.
+`set_zones_visible()`, `set_interpolate()`, `set_timezone()` (hours or an IANA
+name), `set_delays()`, `set_follow()`, `print(cm_per_min=…)` and
+`on(event, callback)` to listen for scroll / button / marker events. It is
+responsive, supports a configurable number of signals per graph, FHR/MHR
+toggling with linear gap interpolation, colored acceleration / deceleration /
+contraction zones, a "follow live" control for recordings that grow, and a
+translatable toolbar.
+
+#### Viewer options
+
+`new FHRViewer(host, opts)` in JavaScript; the Python `FHRViewer(...)` forwards
+any extra keyword as-is (`FHRViewer(path, labels=..., delays=..., follow=True)`).
+
+| Option | Default | Meaning |
+|--------|---------|---------|
+| `height` | CSS (400 from Python) | viewer height in px; the handle at the bottom drags it |
+| `scale` | `1` | paper speed in cm/min, `1` or `3` — `setScale()`, event `scaleChange` |
+| `channels`, `signalsPerGraph` | auto | which FHR channels to draw |
+| `interpolate` | `false` | bridge gaps up to 30 s linearly |
+| `zones`, `contractions`, `falseSignals` | `true` | coloured ACC/DEC, CON and URS zones |
+| `range`, `safeZone` | `[50, 210]`, `[110, 160]` | FHR grid bounds and the grey "normal" band (bpm) |
+| `tzOffset` | `0` | time-axis offset in seconds (UTC) |
+| `timeZone` | `null` | IANA zone of the time axis (`'Europe/Paris'`, DST-aware), overrides `tzOffset` — `setTimezone(name or seconds)` |
+| `labels` | `{}` | translated tooltips `{name: text}` and captions `{'name.text': text}` (`scale.text`, `mhr.text`, `follow`, `resizebar`…) |
+| `delays` | `null` | per-sensor estimation delays in seconds `{doppler, scalp, mecg, mhrToco, mhrOximeter, toco}`, compensated **at display time** from each sample's Q byte (Doppler / scalp, Toco pulse / SpO₂ / maternal ECG); the file is never modified — `setDelays()`, event `delaysChange` |
+| `follow` | `false` | keep the view locked on the live end after every `loadBuffer()`; the ⇥ button at the right end of the scrollbar toggles it, any navigation by the user releases it — `setFollow()`, event `followChange` |
+| `bytesPerSample` | from the extension | `6`, `8` or `12` when the extension is ambiguous (OpenCTG `.fhr` files are 8 bytes/sample, FHRMA `.fhr` files 6) |
+| `headerBytes` | auto | `4` or `8`; by default detected by divisibility of the body, as `fhrpy.io.read_fhr` does |
+
+`print({cmPerMin, paper, header, footer, fillLastPage, filename})` downloads a
+multi-page landscape PDF (`A4` by default, `letter` / `legal`) at 1 or 3 cm/min,
+with the header lines and `page i/n` on every page.
+
+**Marker conventions** (companion `.fhrh` / `.marks` file, one `SSSSSSS text`
+line per marker): `$ ACC 192`-style lines are computed zones; `£text` is a
+protected marker (blue, not editable — sensor changes, monitor notes); `£!text`
+is a protected **alert** (red — device failure); `§key k=v …` is protected
+metadata of the recording (monitor model, serial number…), never drawn but kept
+on save; any other text is a free, editable event marker (Enter validates,
+Escape cancels).
 
 ### The signal-processing methods (no viewer)
 
@@ -111,11 +147,22 @@ fs["prob"], fs["mask"], fs["segments"]      # per-sample P(false) + episodes
 ## File format
 
 Little-endian, 4 Hz. Header is a `uint32` timestamp (dataset files) or
-`magic + timestamp` (recorder files). Per sample: `FHR1, FHR2` (`uint16`/4),
+`magic + timestamp` (recorder files) — both the Python reader and the JS viewer
+detect its length by divisibility of the body. Per sample: `FHR1, FHR2` (`uint16`/4),
 optional `MHR` (`uint16`/4), `TOCO` (`uint8`/2), a quality/sensor byte, and —
 in analysed `.rcfa` files — preprocessed `FHRi` and `baseline`. Extensions:
 `.fhr`/`.rcf` = 6 B/sample, `.fhrm`/`.rcfm` = 8 B/sample, `.dat` = 4 B/sample
-(PhysioNet CTU-UHB), analysed variants add 4 B/sample.
+(PhysioNet CTU-UHB), analysed variants add 4 B/sample. Note that OpenCTG's
+`.fhr` files are 8 B/sample (with MHR): pass `bytesPerSample=8` to the viewer for
+those.
+
+## Tests
+
+```bash
+python3 -m pytest -q                     # Python: I/O, DSP, viewer wrapper, MATLAB parity
+npm test                                 # viewer JS unit tests — node --test tests/js/ (no browser, no dependency)
+npx playwright test --project=chromium   # browser end-to-end specs in e2e/ (npm ci + a Playwright browser)
+```
 
 ## Datasets & examples
 

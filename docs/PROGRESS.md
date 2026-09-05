@@ -19,6 +19,17 @@ A single place to review the project state from the repository browser
 | 4 | Full README + demos + AIM-CTG recruiting | ✅ README done (AIM-CTG text + demos pending) |
 | 5 | MLOps real-time inference server | ✅ stdlib HTTP server + Docker; real bench 12×3h in ~40 s on 4 cores (issue #6) |
 
+**2026-09 — viewer options from OpenCTG** (issues #14–#25, branch `dev`): the
+changes OpenCTG made in its vendored copy of the viewer came back upstream as
+options with unchanged defaults — header length auto-detection and
+`bytesPerSample` / `headerBytes`, `labels` (i18n), `delays` (per-sensor delay
+compensation at display time), `timeZone` (IANA zone), the `£!` / `§` marker
+conventions, `print()` options (cm/min, paper, header, footer), marker-editing
+keys, the resize handle — plus a "follow live" control on the scrollbar, the MHR
+toggle in the MHR colour, and pure white paper. `npm test` runs browser-free
+unit tests of the viewer (`tests/js/`, Node only); `e2e/viewer_options.spec.ts`
+builds its page from the current source. See `CHANGELOG.md`.
+
 Install path verified: `pip install .` in a clean venv packages the web assets +
 the FS model weights, and the viewer / WMFB / FS all work from the installed
 package (so `pip install` + Colab work end-to-end). CI workflow is ready at
