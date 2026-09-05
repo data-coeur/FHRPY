@@ -1535,20 +1535,34 @@ export class FHRViewer {
   }
 
   /**
-   * Build a multi-page A4-landscape **PDF** of the whole recording and download
-   * it. Geometry: 1 cm/min horizontally and 20 bpm/cm vertically (a 12.63 cm
-   * graph area gives 20 bpm/cm for the default 50–210 range); consecutive pages
-   * overlap by ~2 min so nothing falls on a seam. The PDF is assembled in-page
-   * (one JPEG strip per page) and saved via a Blob download, so it works even
-   * inside a notebook iframe where window.open()/print() is blocked.
+   * Build a multi-page landscape **PDF** of the whole recording and download
+   * it. Geometry: 1 cm/min horizontally (3 with `cmPerMin: 3`) and 20 bpm/cm
+   * vertically (a 12.63 cm graph area gives 20 bpm/cm for the default 50–210
+   * range); consecutive pages overlap by ~2 min so nothing falls on a seam.
+   * The PDF is assembled in-page (one JPEG strip per page) and saved via a
+   * Blob download, so it works even inside a notebook iframe where
+   * window.open()/print() is blocked.
+   *
+   * Options: cmPerMin (1 | 3), paper ('A4' | 'letter' | 'legal'), header
+   * (array of text lines printed above the strip on every page, with
+   * "page i/n"), footer (one line at the bottom), fillLastPage (keep the
+   * regular pace on the last page and fill it with an empty grid instead of
+   * sliding back over the previous page), filename, pageWidthCm,
+   * pageHeightCm, overlapMin. The printed axis follows `timeZone` and the
+   * printed channels follow `delays`, like the screen.
    */
   print(opts = {}) {
     const src = this.graph, s = src.signals;
     if (s.start < 0) return this;
     const pxPerCm = 37.8 * 2;                       // 2x oversampling for crisp print
-    const Wcm = opts.pageWidthCm || 27;             // fill the A4-landscape width (~1 cm/min)
+    // Paper: [width pt, height pt, printable strip width cm], landscape.
+    const PAPERS = { A4: [842, 595, 27], letter: [792, 612, 25.5], legal: [1008, 612, 33] };
+    const paper = PAPERS[opts.paper] || PAPERS.A4;
+    const Wcm = opts.pageWidthCm || paper[2];       // fill the printable width (~1 cm/min)
     const Hcm = opts.pageHeightCm || 12.63;         // graph area -> 20 bpm/cm
     const overlapSec = (opts.overlapMin != null ? opts.overlapMin : 2) * 60;
+    const headerLines = Array.isArray(opts.header) ? opts.header.map((l) => String(l)) : [];
+    const footer = opts.footer ? String(opts.footer) : '';
 
     // Offscreen render surface that reuses the parsed signals + display state.
     const box = document.createElement('div');
@@ -1564,7 +1578,9 @@ export class FHRViewer {
     gp.interpolate = src.interpolate;
     gp.channels = src.channels;
     gp.tzOffset = src.tzOffset;
-    gp.is3cm = 0;                                    // print at 1 cm/min
+    gp.timeZone = src.timeZone;                      // printed axis in the zone of the screen
+    gp.delays = src.delays;                          // printed channels follow the display
+    gp.is3cm = opts.cmPerMin === 3 ? 1 : 0;          // 1 cm/min (default) or 3 cm/min
     gp.fullGrid = 1;
 
     gp.time = s.start;
@@ -1575,12 +1591,16 @@ export class FHRViewer {
     const nPages = Math.max(1, Math.ceil((totalSec - overlapSec) / step));
 
     const PT = 28.3465;                              // points per cm
-    const W = 842, H = 595;                          // A4 landscape (points)
+    const W = paper[0], H = paper[1];                // landscape page (points)
     const imgWpt = Wcm * PT, imgHpt = Hcm * PT;      // place the strip at its real cm size
     const jpegs = [];
     let imgW = 0, imgH = 0;
     for (let i = 0; i < nPages; i++) {
-      gp.time = Math.min(s.start + i * step, Math.max(s.start, s.lastTime - winSec));
+      // With fillLastPage the last page keeps the regular pace and is filled
+      // with an empty grid instead of sliding back over the previous page.
+      gp.time = opts.fillLastPage
+        ? s.start + i * step
+        : Math.min(s.start + i * step, Math.max(s.start, s.lastTime - winSec));
       gp.redraw();
       imgW = gp.canvas.width; imgH = gp.canvas.height;
       const b64 = gp.canvas.toDataURL('image/jpeg', 0.85).split(',')[1];
@@ -1590,7 +1610,7 @@ export class FHRViewer {
     }
     document.body.removeChild(box);
 
-    const pdf = this._buildPdf(jpegs, imgW, imgH, W, H, imgWpt, imgHpt);
+    const pdf = this._buildPdf(jpegs, imgW, imgH, W, H, imgWpt, imgHpt, { header: headerLines, footer });
     const url = URL.createObjectURL(new Blob([pdf], { type: 'application/pdf' }));
     const a = document.createElement('a');
     a.href = url; a.download = `${opts.filename || 'ctg'}.pdf`;
@@ -1599,8 +1619,12 @@ export class FHRViewer {
     return this;
   }
 
-  /** Assemble a minimal multi-page PDF, one full-strip DCTDecode (JPEG) per page. */
-  _buildPdf(jpegs, imgW, imgH, W, H, imgWpt, imgHpt) {
+  /**
+   * Assemble a minimal multi-page PDF, one full-strip DCTDecode (JPEG) per
+   * page, with an optional header block (real PDF text, so it stays
+   * searchable and extractable), "page i/n" and a footer line.
+   */
+  _buildPdf(jpegs, imgW, imgH, W, H, imgWpt, imgHpt, text = {}) {
     const parts = [];
     let length = 0;
     const enc = (str) => {
@@ -1618,25 +1642,53 @@ export class FHRViewer {
       add('endobj\n');
     };
     const n = jpegs.length;
-    const total = 2 + 3 * n;
+    const header = text.header || [], footer = text.footer || '';
+    const lineH = 11, headerH = header.length ? 8 + header.length * lineH : 0;
+    const pdfText = (str) => {
+      // WinAnsi: Latin-1 bytes; escape the PDF string delimiters.
+      let out = '';
+      for (const ch of String(str)) {
+        const c = ch.charCodeAt(0);
+        if (ch === '(' || ch === ')' || ch === '\\') out += '\\' + ch;
+        else if (c === 0x2014) out += '\\227';           // em dash
+        else if (c === 0x2013) out += '\\226';           // en dash
+        else if (c === 0x2019) out += "'";
+        else if (c === 0x2026) out += '...';
+        else if (c === 0xB7) out += '\\267';
+        else if (c > 255) out += '?';
+        else if (c > 126) out += '\\' + c.toString(8).padStart(3, '0');
+        else out += ch;
+      }
+      return out;
+    };
+    const total = 3 + 3 * n;                         // catalog, pages, font, then 3 objects per page
     add('%PDF-1.4\n%\xE2\xE3\xCF\xD3\n');
     obj(1, '<< /Type /Catalog /Pages 2 0 R >>');
     const pageNums = [];
-    for (let i = 0; i < n; i++) pageNums.push(5 + 3 * i);
+    for (let i = 0; i < n; i++) pageNums.push(6 + 3 * i);
     obj(2, `<< /Type /Pages /Count ${n} /Kids [${pageNums.map((p) => `${p} 0 R`).join(' ')}] >>`);
-    const ty = (H - imgHpt - 20).toFixed(2);         // 20 pt top margin
+    obj(3, '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>');
+    const ty = (H - imgHpt - 20 - headerH).toFixed(2);   // 20 pt top margin + header block
     const tx = (Math.max(0, (W - imgWpt) / 2)).toFixed(2);   // centre the strip in X
     for (let i = 0; i < n; i++) {
-      const img = 3 + 3 * i, content = 4 + 3 * i, page = 5 + 3 * i;
+      const img = 4 + 3 * i, content = 5 + 3 * i, page = 6 + 3 * i;
       obj(img, {
         dict: `<< /Type /XObject /Subtype /Image /Width ${imgW} /Height ${imgH} `
           + `/ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${jpegs[i].length} >>`,
         stream: jpegs[i],
       });
-      const cs = `q ${imgWpt.toFixed(2)} 0 0 ${imgHpt.toFixed(2)} ${tx} ${ty} cm /Im Do Q`;
+      let cs = `q ${imgWpt.toFixed(2)} 0 0 ${imgHpt.toFixed(2)} ${tx} ${ty} cm /Im Do Q\n`;
+      let y = H - 20;
+      header.forEach((line, k) => {
+        const size = k === 0 ? 10 : 9;
+        cs += `BT /F1 ${size} Tf ${tx} ${(y - size).toFixed(2)} Td (${pdfText(line)}) Tj ET\n`;
+        y -= lineH;
+      });
+      cs += `BT /F1 9 Tf ${(W - 80).toFixed(2)} ${(H - 30).toFixed(2)} Td (${pdfText(`page ${i + 1}/${n}`)}) Tj ET\n`;
+      if (footer) cs += `BT /F1 7 Tf ${tx} 12 Td (${pdfText(footer)}) Tj ET\n`;
       obj(content, { dict: `<< /Length ${cs.length} >>`, stream: enc(cs) });
       obj(page, `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${W} ${H}] `
-        + `/Resources << /XObject << /Im ${img} 0 R >> >> /Contents ${content} 0 R >>`);
+        + `/Resources << /XObject << /Im ${img} 0 R >> /Font << /F1 3 0 R >> >> /Contents ${content} 0 R >>`);
     }
     const xref = length;
     add(`xref\n0 ${total + 1}\n0000000000 65535 f \n`);
