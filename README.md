@@ -160,7 +160,7 @@ those.
 
 ```bash
 python3 -m pytest -q                     # Python: I/O, DSP, viewer wrapper, MATLAB parity
-npm test                                 # viewer JS unit tests — node --test tests/js/ (no browser, no dependency)
+npm test                                 # viewer JS unit tests — node --test, no browser, no dependency
 npx playwright test --project=chromium   # browser end-to-end specs in e2e/ (npm ci + a Playwright browser)
 ```
 

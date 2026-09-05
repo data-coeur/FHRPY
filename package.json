@@ -9,7 +9,7 @@
     "test": "tests"
   },
   "scripts": {
-    "test": "node --test tests/js/*.test.mjs",
+    "test": "node --test 'tests/js/*.test.mjs'",
     "test:e2e": "playwright test --project=chromium"
   },
   "repository": {

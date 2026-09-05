@@ -44,7 +44,7 @@ unchanged defaults**, plus the new requests of the same issue:
 
 ### Tests
 
-- `npm test` → `node --test tests/js/`: browser-free unit tests of the viewer
+- `npm test` → `node --test 'tests/js/*.test.mjs'`: browser-free unit tests of the viewer
   with a small DOM stub (no dependency). (#25)
 - `e2e/viewer_options.spec.ts`: Playwright checks built from the current source
   (header detection in a real browser, paper and label pixels, follow control,
