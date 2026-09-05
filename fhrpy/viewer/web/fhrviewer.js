@@ -355,6 +355,11 @@ class GraphPlot {
     this.interpMaxGap = 4 * 30; // bridge gaps up to 30 s by default
     this.channels = null;       // explicit list of channels to display, else auto
     this.tzOffset = 0;          // time-axis offset in seconds (0 = UTC; epoch 0 -> 00:00)
+    this.timeZone = null;       // IANA zone name (DST-aware) for the time axis; overrides tzOffset when set
+    // Per-sensor estimation delays in seconds ({doppler, scalp, mecg, mhrToco,
+    // mhrOximeter, toco}) applied at display time; null = draw the raw samples.
+    this.delays = null;
+    this._shiftCache = new Map();
 
     this.bufferCanvas = document.createElement('canvas');
     this.bufferContext = this.bufferCanvas.getContext('2d');
@@ -422,8 +427,79 @@ class GraphPlot {
     return list
       .filter(([name]) => visible[name] !== false)
       .map(([name, arr]) => ({
-        name, arr, color: DEFAULT_COLORS[name] || '#000', light: LIGHT_COLORS[name],
+        name, arr: this._displayArray(name, arr), color: DEFAULT_COLORS[name] || '#000', light: LIGHT_COLORS[name],
       }));
+  }
+
+  /* --- per-sensor estimation delays (display-time compensation) ----------- */
+  /** Samples to move a channel earlier for a delay in seconds (null / unknown = 0). */
+  _shiftSamples(seconds) {
+    return typeof seconds === 'number' && Number.isFinite(seconds) && seconds > 0
+      ? Math.round(seconds * this.signals.srate) : 0;
+  }
+
+  /**
+   * Maternal-heart-rate sensor when it is not the Toco transducer: the Q byte
+   * only says "Toco or not", so the acquisition's sensor-change markers of
+   * that channel (`£Purple=…` / `£Violet=…`) decide between maternal ECG and
+   * pulse oximetry; without one, oximetry (the usual Philips case).
+   */
+  _mhrSensorSteps() {
+    const steps = [];
+    for (const m of this.signals.Marks || []) {
+      if (!m || !/^£(Violet|Purple)=/.test(m[1])) continue;
+      steps.push([m[0], /ECG/i.test(m[1]) ? 'mecg' : /TOCO/i.test(m[1]) ? 'mhrToco' : 'mhrOximeter']);
+    }
+    return steps.sort((a, b) => a[0] - b[0]);
+  }
+
+  /**
+   * The array actually drawn for a channel: each sample moved EARLIER by the
+   * delay of its own sensor mode (Q byte of that sample) — FHR by `doppler`
+   * or `scalp` (isECG1 / isECG2 bits), MHR by `mhrToco` (isTOCOMHR bit),
+   * `mecg` or `mhrOximeter`, TOCO by `toco`. Without delays, the raw array.
+   * The tail left empty by the shift is "no signal" (0 for a heart rate, NaN
+   * for the TOCO), which is why the right edge of a delayed channel sits back
+   * in real time. A blank heart-rate sample never erases a real one that
+   * another mode placed at a sensor change. Cached per channel until the
+   * data, the marks or the delays change. The file itself is never modified.
+   */
+  _displayArray(name, arr) {
+    const d = this.delays;
+    if (!d || !arr || !arr.length) return arr;
+    if (name !== 'FHR1' && name !== 'FHR2' && name !== 'MHR' && name !== 'TOCO') return arr;
+    const sh = {
+      doppler: this._shiftSamples(d.doppler), scalp: this._shiftSamples(d.scalp), mecg: this._shiftSamples(d.mecg),
+      mhrToco: this._shiftSamples(d.mhrToco), mhrOximeter: this._shiftSamples(d.mhrOximeter), toco: this._shiftSamples(d.toco),
+    };
+    const own = name === 'TOCO' ? [sh.toco] : name === 'MHR' ? [sh.mhrToco, sh.mecg, sh.mhrOximeter] : [sh.doppler, sh.scalp];
+    if (!own.some((x) => x > 0)) return arr;
+    const s = this.signals;
+    const key = `${arr.length}|${sh.doppler},${sh.scalp},${sh.mecg},${sh.mhrToco},${sh.mhrOximeter},${sh.toco}|${(s.Marks || []).length}`;
+    const cached = this._shiftCache.get(name);
+    if (cached && cached.key === key && cached.src === arr) return cached.out;
+    const Q = s.Q || [];
+    const steps = name === 'MHR' ? this._mhrSensorSteps() : [];
+    const isToco = name === 'TOCO';
+    const out = new Array(arr.length).fill(isToco ? NaN : 0);
+    let step = 0, other = 'mhrOximeter';
+    for (let i = 0; i < arr.length; i++) {
+      const q = Q[i] | 0;
+      let k;
+      if (name === 'FHR1') k = (q & 0x02) ? sh.scalp : sh.doppler;
+      else if (name === 'FHR2') k = (q & 0x08) ? sh.scalp : sh.doppler;
+      else if (name === 'MHR') {
+        while (step < steps.length && steps[step][0] <= i) { other = steps[step][1]; step++; }
+        k = (q & 0x20) ? sh.mhrToco : sh[other === 'mhrToco' ? 'mhrOximeter' : other];
+      } else k = sh.toco;
+      const j = i - k;
+      if (j < 0) continue;
+      const v = arr[i];
+      if (!isToco && !(v > 0) && out[j] > 0) continue;
+      out[j] = v;
+    }
+    this._shiftCache.set(name, { key, src: arr, out });
+    return out;
   }
 
   /** Per-sample boolean mask of false-signal (URS/NTA) regions, from the marks. */
@@ -586,14 +662,32 @@ class GraphPlot {
     const t = new Date();
     const secGap = 600 / (1 + this.is3cm);
     const tz = this.tzOffset || 0; // seconds; 0 = UTC so an epoch-0 (anonymised) start reads 00:00
+    const zoned = this._axisFormatter(); // null unless an IANA `timeZone` is set
     for (let i = 0; i < this.winlength / secGap; i++) {
       const textx = this.BorderLeft + ((secGap - (this.time % secGap) + i * secGap) / this.winlength) * this.graphWidth;
       const texty = this.TotalHeight - this.BorderBottom;
-      t.setTime(((Math.floor(this.time / secGap + 1) + i) * secGap + tz) * 1000);
-      const text = ('00' + t.getUTCHours()).slice(-2) + 'h' + ('00' + t.getUTCMinutes()).slice(-2);
+      t.setTime(((Math.floor(this.time / secGap + 1) + i) * secGap + (zoned ? 0 : tz)) * 1000);
+      const text = zoned ? zoned(t) : ('00' + t.getUTCHours()).slice(-2) + 'h' + ('00' + t.getUTCMinutes()).slice(-2);
       ctx.fillText(text, textx, texty);
     }
     this.hline(this.BorderLeft, this.TotalWidth - this.BorderRight, this.TotalHeight - this.BorderBottom, 1, '#000000');
+  }
+
+  /**
+   * `HHhMM` in the IANA `timeZone` (daylight-saving time included), or null
+   * when no zone is set — the fixed `tzOffset` then applies. An unknown zone
+   * name falls back to the offset rather than throwing in the middle of a redraw.
+   */
+  _axisFormatter() {
+    if (!this.timeZone) return null;
+    if (this._axisZone !== this.timeZone) {
+      try {
+        this._axisFmt = new Intl.DateTimeFormat('en-GB', { timeZone: this.timeZone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+        this._axisZone = this.timeZone;
+      } catch (e) { this.timeZone = null; return null; }
+    }
+    const fmt = this._axisFmt;
+    return (d) => fmt.format(d).replace(':', 'h');
   }
 
   /* --- colored zones (periods) ------------------------------------------- */
@@ -714,9 +808,10 @@ class GraphPlot {
       let y0 = NaN;
       this.ctx.beginPath();
       this.ctx.strokeStyle = DEFAULT_COLORS.TOCO;
+      const toco = this._displayArray('TOCO', s.TOCO);
       for (let k = 0; k <= this.winlength * s.srate; k += 4) {
         const x1 = this.BorderLeft + (k * this.graphWidth) / (s.srate * this.winlength);
-        const v = s.TOCO[d + k];
+        const v = toco[d + k];
         if (!Number.isNaN(v) && v !== undefined) {
           const y1 = this.BorderTop + this.RCFHeight + this.RCFTOCOSpace
             + (this.TOCOHeight * (s.maxTOCO - v)) / (s.maxTOCO - s.minTOCO);
@@ -1086,6 +1181,7 @@ export class FHRViewer {
       this.graph.channels = ['FHRi', 'FHR1', 'FHR2', 'MHR'].slice(0, opts.signalsPerGraph);
     }
     if (typeof opts.tzOffset === 'number') this.graph.tzOffset = opts.tzOffset;
+    if (typeof opts.timeZone === 'string' && opts.timeZone) this.graph.timeZone = opts.timeZone;
     if (typeof opts.falseSignalChannel === 'string') this.graph.falseSignalChannel = opts.falseSignalChannel;
     if (opts.scale === 3) this.graph.is3cm = 1;
     if (opts.interpolate) this.graph.interpolate = true;
@@ -1577,11 +1673,12 @@ export class FHRViewer {
 
   toggle3cm() { return this.setScale(this.graph.is3cm ? 1 : 3); }
 
-  /** Set the time-axis timezone offset in seconds (0 = UTC). */
-  setTimezone(offsetSeconds) {
-    this.graph.tzOffset = Number(offsetSeconds) || 0;
+  /** Set the time-axis timezone: an offset in seconds (0 = UTC) or an IANA zone name ('Europe/Paris'). */
+  setTimezone(offsetSecondsOrZone) {
+    if (typeof offsetSecondsOrZone === 'string') this.graph.timeZone = offsetSecondsOrZone || null;
+    else { this.graph.timeZone = null; this.graph.tzOffset = Number(offsetSecondsOrZone) || 0; }
     this.graph.redraw();
-    this._emit('timezoneChange', { offsetSeconds: this.graph.tzOffset });
+    this._emit('timezoneChange', { offsetSeconds: this.graph.tzOffset, timeZone: this.graph.timeZone });
     return this;
   }
 
