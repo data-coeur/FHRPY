@@ -18,21 +18,39 @@
  *   - public JS API + event emitter + postMessage bridge for a Python backend
  *
  * Binary format (little-endian), ported from fhrsignal-source.js:
- *   Header: [uint32 magic][uint32 startEpoch seconds]
- *   Optional [uint32 code] (1234567 recording / 1234568 finished) — skipped if present.
- *   Then N samples at 4 Hz:
+ *   Header: [uint32 startEpoch seconds] (dataset / acquisition files, 4 bytes)
+ *           or [uint32 magic][uint32 startEpoch seconds] (recorder files, 8);
+ *           the length is auto-detected by divisibility of the body (the rule
+ *           of fhrpy.io.read_fhr) unless `opts.headerBytes` forces it.
+ *   Optional [uint32 code] (1234567 recording / 1234568 finished) after an
+ *           8-byte header: the legacy streamed payload — skipped if present.
+ *   Then N samples at 4 Hz — bytes per sample from the extension, or from
+ *   `opts.bytesPerSample` when the extension is ambiguous (OpenCTG's `.fhr`
+ *   is 8 bytes/sample, FHRMA's is 6):
  *     .rcf / .fhr  (6 bytes):  u16 FHR1, u16 FHR2, u8 TOCO, u8 qual
- *     .rcfm        (8 bytes):  u16 FHR1, u16 FHR2, u16 MHR, u8 TOCO, u8 qual
+ *     .rcfm / .fhrm (8 bytes): u16 FHR1, u16 FHR2, u16 MHR, u8 TOCO, u8 qual
  *     .rcfa       (12 bytes):  + u16 FHRi (preprocessed), u16 baseline
  *   Scaling: FHR/MHR/FHRi/baseline = raw/4 ; TOCO = raw/2.
  *   Missing / lost signal = value 0 (or <=40 for FHR) -> breaks the curve.
+ *
+ * Marker text conventions (companion `.fhrh` / `.marks` file):
+ *   `$ TTT N`  computed zone (ACC / DEC / CON / URS), painted, never as text
+ *   `£text`    protected marker (sensor change, monitor note): blue, not editable
+ *   `£!text`   protected ALERT marker (device failure): red, not editable
+ *   `§key k=v` protected metadata (device model, serial…): never drawn
+ *   anything else: a free, editable event marker (orange)
  */
 
 const SVGNS = 'http://www.w3.org/2000/svg';
 const MAGIC = 1234555;          // header magic (validity check, best-effort)
 const CODE_RECORDING = 1234567; // optional data-stream code
 const CODE_FINISHED = 1234568;
-const GRID_COLOR = '#AAFFAA';   // classic CTG green paper
+const GRID_COLOR = '#AAFFAA';   // classic CTG green grid
+const PAPER_COLOR = '#FFFFFF';  // pure white paper, on screen and in print
+const SAFE_BAND_COLOR = '#F0F0F0';      // grey band behind the normal FHR range
+const MARK_COLOR = '#FFBB00';           // free event markers (orange)
+const PROTECTED_MARK_COLOR = '#0000FF'; // `£` markers (blue)
+const ALERT_MARK_COLOR = '#c2483b';     // `£!` markers: device alert / failure (red)
 
 const DEFAULT_COLORS = {
   FHR1: '#FF0000',     // red
@@ -66,6 +84,9 @@ class Signals {
     this.start = -1;
     this.lastTime = -1;
     this.bytesBySample = 8;
+    // Layout hints from the host (FHRViewer opts.bytesPerSample / opts.headerBytes):
+    // null / 'auto' = infer from the extension / detect from the buffer size.
+    this.layout = { bytesPerSample: null, headerBytes: 'auto' };
     this.editingMark = false;
     this._reset();
   }
@@ -77,39 +98,66 @@ class Signals {
     this.RCFi = [];
     this.baselineRCF = [];
     this.TOCO = [];
+    this.Q = [];                // quality / sensor-mode byte of each sample (bit layout of fhrsave.m)
     this.Marks = [];
     this.start = startTime;
     this.lastTime = startTime;
     this.badSigPoints = 0;
   }
 
-  /** Decode an ArrayBuffer into the signal arrays. `ext` selects bytes/sample. */
-  loadBuffer(arrayBuffer, ext = 'rcfm') {
+  /** Bytes per sample implied by an extension: `.rcf` / `.fhr` 6, `.rcfa` 12, `.rcfm` / `.fhrm` / other 8. */
+  static bytesPerSampleFor(ext) {
     const last = (ext || '').toLowerCase().replace('.', '').slice(-1);
-    if (last === 'r' || last === 'f') this.bytesBySample = 6;
-    else if (last === 'm') this.bytesBySample = 8;
-    else if (last === 'a') this.bytesBySample = 12;
-    else this.bytesBySample = 8;
+    if (last === 'r' || last === 'f') return 6;
+    if (last === 'a') return 12;
+    return 8;
+  }
+
+  /**
+   * Header length of a buffer, among `candidates` tried in order: 4 (dataset
+   * and acquisition files: epoch only), 8 (recorder files: magic + epoch) or
+   * 12 (8 + the legacy streamed code word, accepted only when the word really
+   * is one). The first candidate whose body is a whole number of samples wins
+   * — the divisibility rule of fhrpy.io.read_fhr; when none fits (a file still
+   * being written) the first candidate is assumed. Reading a 4-byte header as
+   * an 8-byte one shifts every sample and draws a trace that looks plausible
+   * but is wrong, which is why this is detected rather than assumed.
+   */
+  static detectHeader(view, stride, candidates) {
+    const total = view.byteLength;
+    for (const h of candidates) {
+      if (total < h || (total - h) % stride !== 0) continue;
+      if (h === 12) {
+        const code = view.getUint32(8, true);
+        if (code !== CODE_RECORDING && code !== CODE_FINISHED) continue;
+      }
+      return h;
+    }
+    return candidates[0];
+  }
+
+  /**
+   * Decode an ArrayBuffer into the signal arrays. `ext` selects the bytes per
+   * sample unless `layout.bytesPerSample` (or the host's `opts.bytesPerSample`)
+   * says otherwise; the header length is auto-detected unless
+   * `layout.headerBytes` (or `opts.headerBytes`) is 4 or 8.
+   */
+  loadBuffer(arrayBuffer, ext = 'rcfm', layout = {}) {
+    const name = (ext || '').toLowerCase().replace('.', '');
+    const bps = layout.bytesPerSample || this.layout.bytesPerSample;
+    this.bytesBySample = (bps === 6 || bps === 8 || bps === 12) ? bps : Signals.bytesPerSampleFor(name);
 
     const view = new DataView(arrayBuffer);
     const total = view.byteLength;
-    let off = 0;
-    // Header: magic + startEpoch. (Some files carry magic=0; tolerate that.)
-    view.getUint32(0, true); // magic (unused beyond documentation)
-    const startEpoch = view.getUint32(4, true);
-    off = 8;
-
-    // Optional code word: present in the legacy streamed data payload.
-    if (total - off >= 4) {
-      const code = view.getUint32(off, true);
-      if (code === CODE_RECORDING || code === CODE_FINISHED) off += 4;
-    }
-
-    // If the remaining bytes are not a whole number of samples, the code word
-    // was probably absent; off stays at 8 (header only).
-    if ((total - off) % this.bytesBySample !== 0 && (total - 8) % this.bytesBySample === 0) {
-      off = 8;
-    }
+    // Recorder files (`.rcf*`) carry magic + epoch, dataset and acquisition
+    // files the epoch only: that is the preference when nothing divides.
+    const forced = layout.headerBytes || this.layout.headerBytes;
+    const candidates = forced === 4 ? [4] : forced === 8 ? [8, 12]
+      : name.startsWith('rcf') ? [8, 12, 4] : [4, 8, 12];
+    const off = Signals.detectHeader(view, this.bytesBySample, candidates);
+    // The epoch sits in the last four bytes of the 4- or 8-byte header proper.
+    const epochAt = off >= 8 ? 4 : 0;
+    const startEpoch = total >= epochAt + 4 ? view.getUint32(epochAt, true) : 0;
 
     this._reset(startEpoch);
     const nSamp = Math.floor((total - off) / this.bytesBySample);
@@ -134,6 +182,7 @@ class Signals {
     this.RCF1.push(f1);
     this.RCF2.push(f2);
     this.TOCO.push(toco / 2);
+    this.Q.push(qual | 0);
     if (this.bytesBySample > 6) {
       this.RCFm.push(rcfm / 4);
       if (this.bytesBySample > 8) {
@@ -1610,6 +1659,9 @@ export class FHRViewer {
 
   _markersChanged() { this._emit('markersChange', { markers: this.getMarkers() }); }
 }
+
+// `Signals` is exported so the decoder (header / sample layout) can be tested without a DOM.
+export { Signals };
 
 // Convenience: auto-upgrade any element with data-fhr-viewer (optional).
 export function upgradeAll(root = document) {
