@@ -87,11 +87,21 @@
   background: #fff;
 }
 
+/* the scrollbar row: the track, then the "follow live" control at its right end */
 .fhr-viewer .fhr-viewer-scrollbar {
   position: relative;
+  display: flex;
+  align-items: stretch;
   width: 100%;
   height: 22px;
   margin: 0;
+}
+
+.fhr-viewer .scrollbarTrack {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 40px;
+  height: 100%;
   background-color: rgba(0, 0, 0, 0.05);
   box-shadow: inset 1px 1px 16px rgba(0, 0, 0, 0.1);
   border-radius: 10px;
@@ -165,4 +175,19 @@
 .fhr-viewer .btn-fhr-icons.active {
   background: #cde6ff;
   border-color: #5a9bd4;
+}
+
+/* --- "follow live" control, at the right end of the scrollbar row --------- */
+.fhr-viewer .btn-fhr-icons.btn-follow {
+  flex: 0 0 auto;
+  height: 100%;
+  min-width: 34px;
+  margin-left: 4px;
+  padding: 0 5px;
+  border-radius: 10px;
+}
+
+.fhr-viewer .btn-fhr-icons.btn-follow svg {
+  width: 18px;
+  height: 18px;
 }

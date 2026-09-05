@@ -1145,6 +1145,9 @@ const ICONS = {
   print: '<svg viewBox="0 0 24 24" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.5">'
     + '<path d="M7 9 V3 h10 v6"/><path d="M7 16 H5 a1 1 0 0 1-1-1 V11 a1 1 0 0 1 1-1 h14 a1 1 0 0 1 1 1 v4 a1 1 0 0 1-1 1 h-2"/>'
     + '<rect x="7" y="14" width="10" height="6.5" rx="0.5"/></g><circle cx="17.2" cy="11.8" r="1" fill="currentColor"/></svg>',
+  // Follow live: an arrow running into the end bar ("go to the live edge and stay there").
+  follow: '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">'
+    + '<path d="M3.5 12 H15"/><path d="M10.5 6.5 L16 12 L10.5 17.5"/><path d="M20.5 5 V19"/></svg>',
 };
 
 // [name, label/icon-key, tooltip, isIcon]
@@ -1169,6 +1172,13 @@ export class FHRViewer {
    * @param {Object} [opts]
    *   height, scale (cm/min: 1 or 3), channels (array of channel names),
    *   signalsPerGraph (number), interpolate (bool), zones (bool),
+   *   contractions (bool), falseSignals (bool), range ([min, max] bpm),
+   *   safeZone ([min, max] bpm), tzOffset (seconds) or timeZone (IANA name),
+   *   labels ({name: tooltip, 'name.text': caption} to translate the toolbar),
+   *   delays ({doppler, scalp, mecg, mhrToco, mhrOximeter, toco} seconds),
+   *   follow (bool: keep the view locked on the live end of the recording),
+   *   bytesPerSample (6 | 8 | 12; else implied by the extension),
+   *   headerBytes (4 | 8; else auto-detected),
    *   onMessage (function for the postMessage bridge fallback).
    */
   constructor(host, opts = {}) {
@@ -1180,7 +1190,7 @@ export class FHRViewer {
 
     this._buildDOM();
     this.graph = new GraphPlot(this.graphEl, this);
-    this.scrollBar = new ScrollBar(this.scrollEl, (v, fast) => this._onScroll(v, fast));
+    this.scrollBar = new ScrollBar(this.scrollTrack, (v, fast) => this._onScroll(v, fast, true));
 
     // apply options
     if (Array.isArray(opts.channels)) this.graph.channels = opts.channels.slice();
@@ -1203,6 +1213,12 @@ export class FHRViewer {
       this.graph.signals.safeMin = Number(opts.safeZone[0]);
       this.graph.signals.safeMax = Number(opts.safeZone[1]);
     }
+    if (opts.delays && typeof opts.delays === 'object') this.graph.delays = { ...opts.delays };
+    const layout = this.graph.signals.layout;
+    if ([6, 8, 12].includes(opts.bytesPerSample)) layout.bytesPerSample = opts.bytesPerSample;
+    if (opts.headerBytes === 4 || opts.headerBytes === 8) layout.headerBytes = opts.headerBytes;
+    this._follow = !!opts.follow;
+    this._btn.follow.classList.toggle('active', this._follow);
 
     this._wireEvents();
 
@@ -1211,6 +1227,7 @@ export class FHRViewer {
     // responsive width
     if (typeof ResizeObserver !== 'undefined') {
       this._ro = new ResizeObserver(() => {
+        this._snapToLiveEnd();
         if (this.graph.signals.start >= 0) this.graph.redraw();
         this._updateScrollBar();
       });
@@ -1234,29 +1251,47 @@ export class FHRViewer {
     const controllers = document.createElement('div');
     controllers.className = 'controllers';
 
-    // Scrollbar gets its own full-width row, on top...
+    // `opts.labels` lets the host translate the toolbar: {name: 'tooltip'}
+    // overrides a tooltip, {'name.text': 'caption'} the caption of a text
+    // button, `resizebar` the tooltip of the drag handle.
+    const L = this.opts.labels || {};
+
+    // Scrollbar gets its own full-width row, on top: the track, then the
+    // "follow live" control at its right end...
     this.scrollEl = document.createElement('div');
     this.scrollEl.className = 'fhr-viewer-scrollbar';
+    this.scrollTrack = document.createElement('div');
+    this.scrollTrack.className = 'scrollbarTrack';
+    const follow = document.createElement('button');
+    follow.type = 'button';
+    follow.className = 'btn-fhr-icons btn-follow icon';
+    follow.title = L.follow || 'Follow live: keep the view on the end of the recording as it grows (click again to release)';
+    follow.innerHTML = ICONS.follow;
+    this.scrollEl.append(this.scrollTrack, follow);
+    this._btn = { follow };
 
     // ...and the icon buttons sit on the row below it (no overlap).
     const icons = document.createElement('div');
     icons.className = 'controller-icons';
-    this._btn = {};
     for (const [name, label, title, isIcon] of BUTTONS) {
       const b = document.createElement('button');
       b.type = 'button';
       b.className = `btn-fhr-icons btn-${name}` + (isIcon ? ' icon' : ' text');
-      b.title = title;        // native tooltip on hover for every button
-      b.innerHTML = isIcon ? (ICONS[label] || '') : label;
+      b.title = L[name] || title;        // native tooltip on hover for every button
+      b.innerHTML = isIcon ? (ICONS[label] || '') : (L[name + '.text'] || label);
       icons.appendChild(b);
       this._btn[name] = b;
     }
     controllers.append(this.scrollEl, icons);
+    // The MHR toggle wears the colour of the MHR curve and a "−" / "+" prefix
+    // that says what the next click does (hide / show).
+    this._btn.mhr.style.color = DEFAULT_COLORS.MHR;
+    this._mhrCaption = L['mhr.text'] || 'MHR';
 
     // bottom drag handle to resize the viewer height (re-added; syncs the iframe)
     this.resizebar = document.createElement('div');
     this.resizebar.className = 'resizebar';
-    this.resizebar.title = 'Drag to resize the viewer height';
+    this.resizebar.title = L.resizebar || 'Drag to resize the viewer height';
 
     this.host.append(this.graphEl, controllers, this.resizebar);
 
@@ -1267,7 +1302,13 @@ export class FHRViewer {
     if (this.opts.scale === 3) this._btn.scale.classList.add('active');
     if (this.opts.interpolate) this._btn.interpolate.classList.add('active');
     this._btn.markers.classList.add('active');
-    this._btn.mhr.classList.add('active');
+    this._renderMhrButton();
+  }
+
+  _renderMhrButton() {
+    const on = this.channelVisible.MHR !== false;
+    this._btn.mhr.classList.toggle('active', on);
+    this._btn.mhr.innerHTML = (on ? '− ' : '+ ') + this._mhrCaption;
   }
 
   _wireEvents() {
@@ -1283,6 +1324,7 @@ export class FHRViewer {
     this._btn.mhr.addEventListener('click', () => { this.setChannelVisible('MHR', this.channelVisible.MHR === false); this._emit('button:mhr', { on: this.channelVisible.MHR }); });
     this._btn.interpolate.addEventListener('click', () => { this.setInterpolate(!this.graph.interpolate); this._emit('button:interpolate', { on: this.graph.interpolate }); });
     this._btn.print.addEventListener('click', () => { this.print(); this._emit('button:print', {}); });
+    this._btn.follow.addEventListener('click', () => { this.setFollow(!this._follow); this._emit('button:follow', { on: this._follow }); });
 
     // bottom resize handle
     this.resizebar.addEventListener('mousedown', (e) => this._resizeDown(e));
@@ -1318,17 +1360,19 @@ export class FHRViewer {
     g.time = t;
     g.redraw();
     this._updateScrollBar();
+    this._afterUserScroll();
     this._emit('scroll', { time: g.time });
     this._wheelRAF = (typeof requestAnimationFrame !== 'undefined')
       ? requestAnimationFrame(() => this._wheelStep()) : null;
   }
 
   /* --- scroll / paging ---------------------------------------------------- */
-  _onScroll(v, fast) {
+  _onScroll(v, fast, byUser = false) {
     const g = this.graph, s = g.signals;
     const sigLength = s.lastTime - s.start;
     g.time = Math.max(v * (sigLength - g.winlength + 120), 0) + s.start;
     g.redraw();
+    if (byUser) this._afterUserScroll();
     this._emit('scroll', { time: g.time, value: v });
   }
 
@@ -1339,6 +1383,31 @@ export class FHRViewer {
     this.scrollBar.setValue((g.time - s.start) / (s.lastTime - s.start - g.winlength + 120), false);
   }
 
+  /* --- follow live: keep the view locked on the end of the recording ------- */
+  /** Time of the rightmost view: the last sample plus the 2-minute blank tail the viewer always allows. */
+  _liveEnd() {
+    const g = this.graph, s = g.signals;
+    if (s.start < 0) return 0;
+    return Math.max(s.start, s.lastTime - (g.winlength || 0) + 120);
+  }
+
+  /** While following, a change of geometry (height, width, paper speed) keeps the live end in view. */
+  _snapToLiveEnd() {
+    const g = this.graph;
+    if (!this._follow || g.signals.start < 0) return;
+    g.resize();
+    g.time = this._liveEnd();
+  }
+
+  /** After a navigation by the user: following stays on only while the view sits at the live end. */
+  _afterUserScroll() {
+    const on = this.graph.signals.start >= 0 && this.graph.time >= this._liveEnd() - 0.5;
+    if (on === this._follow) return;
+    this._follow = on;
+    this._btn.follow.classList.toggle('active', on);
+    this._emit('followChange', { on });
+  }
+
   nextpage() {
     const g = this.graph, s = g.signals;
     let t = g.time + g.winlength - 60;
@@ -1347,6 +1416,7 @@ export class FHRViewer {
     g.time = Math.max(t, s.start);
     g.redraw();
     this._updateScrollBar();
+    this._afterUserScroll();
     this._emit('scroll', { time: g.time });
   }
 
@@ -1357,6 +1427,7 @@ export class FHRViewer {
     g.time = t;
     g.redraw();
     this._updateScrollBar();
+    this._afterUserScroll();
     this._emit('scroll', { time: g.time });
   }
 
@@ -1454,6 +1525,7 @@ export class FHRViewer {
     this._panLast = { x: e.clientX, t: now };
     g.redraw();
     this._updateScrollBar();
+    this._afterUserScroll();
     this._emit('scroll', { time: g.time });
   }
 
@@ -1475,6 +1547,7 @@ export class FHRViewer {
       if (g.time < s.start) { g.time = s.start; this._panVel = 0; }
       g.redraw();
       this._updateScrollBar();
+      this._afterUserScroll();
       this._emit('scroll', { time: g.time });
       this._panVel *= Math.pow(0.95, dt / 16);   // momentum decay
       if (Math.abs(this._panVel) > 0.003) this._flingRAF = requestAnimationFrame(step);
@@ -1486,16 +1559,26 @@ export class FHRViewer {
   /* ====================================================================== *
    *  PUBLIC API
    * ====================================================================== */
-  loadBuffer(arrayBuffer, ext = 'rcfm') {
+  /**
+   * Load a recording. `ext` implies the bytes per sample; `layout`
+   * ({bytesPerSample, headerBytes}) overrides it and the constructor options
+   * for this buffer only. While following (`opts.follow` / `setFollow`), the
+   * view moves to the new live end.
+   */
+  loadBuffer(arrayBuffer, ext = 'rcfm', layout = {}) {
     this._buffer = arrayBuffer;             // keep for download
     this._ext = (ext || 'rcfm').replace('.', '');
-    this.graph.signals.loadBuffer(arrayBuffer, ext);
+    this.graph.signals.loadBuffer(arrayBuffer, ext, layout);
     if (this.graph.time === 0 || this.graph.time < this.graph.signals.start) {
       this.graph.time = this.graph.signals.start;
     }
+    this.graph.resize();                    // winlength, needed by the live end
+    const moved = this._follow && this.graph.time !== this._liveEnd();
+    if (this._follow) this.graph.time = this._liveEnd();
     this.graph.redraw();
     this._updateScrollBar();
     this._updateButtonVisibility();
+    if (moved) this._emit('scroll', { time: this.graph.time, source: 'follow' });
     return this;
   }
 
@@ -1724,6 +1807,7 @@ export class FHRViewer {
   setScale(cmPerMin) {
     this.graph.is3cm = cmPerMin === 3 ? 1 : 0;
     this._btn.scale.classList.toggle('active', !!this.graph.is3cm);
+    this._snapToLiveEnd();
     this.graph.redraw();
     this._updateScrollBar();
     this._emit('scaleChange', { cmPerMin: this.graph.is3cm ? 3 : 1, is3cm: this.graph.is3cm });
@@ -1731,6 +1815,38 @@ export class FHRViewer {
   }
 
   toggle3cm() { return this.setScale(this.graph.is3cm ? 1 : 3); }
+
+  /**
+   * Per-sensor estimation delays of the monitor, in seconds —
+   * {doppler, scalp, mecg, mhrToco, mhrOximeter, toco}; a null value = unknown
+   * = no shift for that sensor; `null` = no compensation (raw samples).
+   */
+  setDelays(delays) {
+    this.graph.delays = delays && typeof delays === 'object' ? { ...delays } : null;
+    this.graph._shiftCache.clear();
+    if (this.graph.signals.start >= 0) this.graph.redraw();
+    this._emit('delaysChange', { delays: this.graph.delays });
+    return this;
+  }
+
+  getDelays() { return this.graph.delays ? { ...this.graph.delays } : null; }
+
+  /** Lock the view on the live end of the recording (each `loadBuffer` keeps the end in view); `false` releases it. */
+  setFollow(on) {
+    this._follow = !!on;
+    this._btn.follow.classList.toggle('active', this._follow);
+    if (this._follow && this.graph.signals.start >= 0) {
+      this.graph.resize();
+      this.graph.time = this._liveEnd();
+      this.graph.redraw();
+      this._updateScrollBar();
+      this._emit('scroll', { time: this.graph.time, source: 'follow' });
+    }
+    this._emit('followChange', { on: this._follow });
+    return this;
+  }
+
+  getFollow() { return this._follow; }
 
   /** Set the time-axis timezone: an offset in seconds (0 = UTC) or an IANA zone name ('Europe/Paris'). */
   setTimezone(offsetSecondsOrZone) {
@@ -1750,6 +1866,7 @@ export class FHRViewer {
       const fr = window.frameElement;
       if (fr) fr.style.height = `${px + 4}px`;
     } catch (e) { /* cross-origin frame: ignore */ }
+    this._snapToLiveEnd();
     if (this.graph.signals.start >= 0) this.graph.redraw();
     this._updateScrollBar();
     this._emit('heightChange', { height: px });
@@ -1758,7 +1875,7 @@ export class FHRViewer {
 
   setChannelVisible(name, visible) {
     this.channelVisible[name] = visible;
-    if (name === 'MHR') this._btn.mhr.classList.toggle('active', visible !== false);
+    if (name === 'MHR') this._renderMhrButton();
     this.graph.redraw();
     return this;
   }
