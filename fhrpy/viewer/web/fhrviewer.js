@@ -100,6 +100,9 @@ class Signals {
     this.TOCO = [];
     this.Q = [];                // quality / sensor-mode byte of each sample (bit layout of fhrsave.m)
     this.Marks = [];
+    // Bumped by every change of the marks: the display cache keys on it, and
+    // editing a sensor-change marker in place must not keep a stale alignment.
+    this.marksVersion = (this.marksVersion || 0) + 1;
     this.start = startTime;
     this.lastTime = startTime;
     this.badSigPoints = 0;
@@ -212,6 +215,7 @@ class Signals {
   /** Parse a marker text blob: one mark per line, `SSSSSSS text` (7-digit sample). */
   loadMarkers(text) {
     this.Marks = [];
+    this.marksVersion++;
     const lines = (text || '').split('\n');
     for (const line of lines) {
       if (line.length > 5) {
@@ -224,6 +228,7 @@ class Signals {
     // Accept [[sample, text], ...]; keep sorted by sample.
     this.Marks = (list || []).map((m) => [Math.round(m[0]), String(m[1])]);
     this.Marks.sort((a, b) => a[0] - b[0]);
+    this.marksVersion++;
   }
 
   getMarks() {
@@ -234,12 +239,14 @@ class Signals {
     let index = 0;
     for (let i = 0; i < this.Marks.length; i++) if (this.Marks[i][0] < s) index++;
     this.Marks.splice(index, 0, [s, t]);
+    this.marksVersion++;
     return index;
   }
 
   updateMark(n, t) {
     this.Marks[n][1] = t;
     if (t === '') this.Marks.splice(n, 1);
+    this.marksVersion++;
   }
 }
 
@@ -475,7 +482,7 @@ class GraphPlot {
     const own = name === 'TOCO' ? [sh.toco] : name === 'MHR' ? [sh.mhrToco, sh.mecg, sh.mhrOximeter] : [sh.doppler, sh.scalp];
     if (!own.some((x) => x > 0)) return arr;
     const s = this.signals;
-    const key = `${arr.length}|${sh.doppler},${sh.scalp},${sh.mecg},${sh.mhrToco},${sh.mhrOximeter},${sh.toco}|${(s.Marks || []).length}`;
+    const key = `${arr.length}|${sh.doppler},${sh.scalp},${sh.mecg},${sh.mhrToco},${sh.mhrOximeter},${sh.toco}|${s.marksVersion}`;
     const cached = this._shiftCache.get(name);
     if (cached && cached.key === key && cached.src === arr) return cached.out;
     const Q = s.Q || [];

@@ -212,6 +212,10 @@ test('opts.delays / setDelays: each channel is moved earlier by the delay of its
   v.loadBuffer(encode(samples, { header: 4, stride: 8 }), 'rcfm');
   v.loadMarkers('0000000 £Purple=Maternal ECG\n');
   assert.deepEqual(where('MHR', g.signals.RCFm), range(60, 70));
+  // changing the sensor marker alone re-aligns the channel: the cache keys on the
+  // version of the marks, not on how many there are
+  v.setMarkers([[0, '£Purple=SpO2 pulse']]);
+  assert.deepEqual(where('MHR', g.signals.RCFm), range(10, 20));
   // live update: the appended samples are shifted too (the cache follows the data)
   v.loadBuffer(encode([...samples, { fhr1: 130, q: 0x01 }], { header: 4, stride: 8 }), 'rcfm');
   assert.equal(g._displayArray('FHR1', g.signals.RCF1)[96], 130);
