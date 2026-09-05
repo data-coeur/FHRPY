@@ -367,7 +367,15 @@ class GraphPlot {
       this.eventTextEdit.style.height = '0px';
       this.eventTextEdit.style.height = `${this.eventTextEdit.scrollHeight}px`;
     });
+    // Enter validates the marker text, Escape cancels, leaving the field validates.
+    this.eventTextEdit.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); this.validateMark(false); }
+      else if (e.key === 'Escape') { e.preventDefault(); this.cancelMark(); }
+    });
+    this.eventTextEdit.addEventListener('blur', () => { if (this.editingMark !== -1) this.validateMark(false); });
     this.svg.addEventListener('mousemove', (e) => this.mouseMove(e), true);
+    // The reference cursor follows the pointer: it leaves the graph with it.
+    this.svg.addEventListener('mouseleave', () => this.clearBox1515());
   }
 
   /* --- geometry ----------------------------------------------------------- */
@@ -736,12 +744,15 @@ class GraphPlot {
     if (!s.Marks) return;
     for (let i = 0; i < s.Marks.length; i++) {
       const m = s.Marks[i];
-      if (!m || m[1][0] === '$') continue;
+      // `$` zones are painted by drawPeriods; `§` lines are protected metadata
+      // (device model, serial number…) and are never drawn.
+      if (!m || m[1][0] === '$' || m[1][0] === '§') continue;
       const tmpx0 = m[0] / s.srate - (this.time - s.start);
       const tmpx = this.BorderLeft + (tmpx0 / this.winlength) * this.graphWidth;
-      const color = m[1][0] === '£' ? '#0000FF' : '#FFBB00';
+      // `£!` = protected alert (device failure), red; `£` = protected, blue; else a free event.
+      const color = m[1].startsWith('£!') ? ALERT_MARK_COLOR : m[1][0] === '£' ? PROTECTED_MARK_COLOR : MARK_COLOR;
       this.ctx.fillStyle = color;
-      const dtext = m[1].replace('£', '');
+      const dtext = m[1].replace(/^£!?/, '');
       const texts = dtext.split('\r');
       for (let k = 0; k < texts.length; k++) {
         let j = 0;
@@ -832,7 +843,7 @@ class GraphPlot {
 
   initializeNewMark(defaultText) {
     this.clearBox1515();
-    const color = (defaultText === 'Question' || (defaultText.length > 0 && defaultText[0] === '£')) ? '#0000FF' : '#FFBB00';
+    const color = (defaultText === 'Question' || (defaultText.length > 0 && defaultText[0] === '£')) ? PROTECTED_MARK_COLOR : MARK_COLOR;
     this.newMark.textEvent = this._svgText(0, this.BorderTop + 17);
     this.newMark.textEvent.setAttributeNS(null, 'fill', color);
     this.newMark.textEvent.textContent = defaultText;
@@ -855,6 +866,7 @@ class GraphPlot {
     } else {
       this.editingMark = s.addMarks(samp, text);
       s.editingMark = true;
+      this._editingOriginal = text;   // what Escape restores ('' = the new mark goes away)
       this.redraw();
       let tmpx = s.Marks[this.editingMark][0] / s.srate - (this.time - s.start);
       tmpx = this.BorderLeft + (tmpx / this.winlength) * this.graphWidth;
@@ -869,13 +881,30 @@ class GraphPlot {
 
   validateMark(shifted = false) {
     const s = this.signals;
-    s.updateMark(this.editingMark, this.eventTextEdit.value);
-    this.eventTextEdit.style.display = 'none';
+    if (this.editingMark === -1) return;   // a blur after a validation must not touch the marks
+    // The edit is closed BEFORE the field is hidden: the blur fired by the hiding must not re-enter.
+    const n = this.editingMark;
     this.editingMark = -1;
     s.editingMark = false;
+    // A line break typed in the field becomes the format's internal `\r`
+    // (display line break): `\n` is the line separator of the marker file.
+    s.updateMark(n, this.eventTextEdit.value.replace(/\r?\n/g, '\r'));
+    this.eventTextEdit.style.display = 'none';
     this.redraw();
     this.viewer._markersChanged();
     if (shifted) setTimeout(() => this.initializeNewMark(this.eventTextEdit.value), 0);
+  }
+
+  /** Escape: the text goes back to what it was; a mark just created is removed. Nothing is emitted. */
+  cancelMark() {
+    const s = this.signals;
+    if (this.editingMark === -1) return;
+    const n = this.editingMark;
+    this.editingMark = -1;
+    s.editingMark = false;
+    s.updateMark(n, this._editingOriginal || '');
+    this.eventTextEdit.style.display = 'none';
+    this.redraw();
   }
 
   checkEditable(x, y) {
@@ -884,10 +913,12 @@ class GraphPlot {
       const r = this.markRects[i];
       if (x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) {
         let n = -1;
-        for (let j = 0; j <= i; j++) { n++; while (s.Marks[n][1][0] === '$') n++; }
+        // markRects only lists the drawn marks: skip the `$` zones and the hidden `§` metadata.
+        for (let j = 0; j <= i; j++) { n++; while (s.Marks[n][1][0] === '$' || s.Marks[n][1][0] === '§') n++; }
         if (s.Marks[n][1][0] !== '£') {
           this.editingMark = n;
           s.editingMark = true;
+          this._editingOriginal = s.Marks[n][1];
           this.redraw();
           this.eventTextEdit.style.left = `${r.x + 2}px`;
           this.eventTextEdit.style.top = `${r.y + 2}px`;
@@ -1374,7 +1405,7 @@ export class FHRViewer {
     const s = this.graph.signals;
     const marks = s.Marks || [];
     const hasType = (t) => marks.some((m) => m && m[1] && m[1][0] === '$' && m[1].substring(2, 5) === t);
-    const hasText = marks.some((m) => m && m[1] && m[1][0] !== '$');
+    const hasText = marks.some((m) => m && m[1] && m[1][0] !== '$' && m[1][0] !== '§'); // `§` is never drawn
     const hasBaseline = (s.baselineRCF && s.baselineRCF.length > 0) || hasType('ACC') || hasType('DEC');
     const show = (name, on) => { if (this._btn[name]) this._btn[name].style.display = on ? '' : 'none'; };
     show('baseline', hasBaseline);
